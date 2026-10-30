@@ -73,7 +73,7 @@ st.sidebar.caption("Terminal v2.0 • Live über GitHub & Streamlit")
 
 # Platzhalter für ein Header-Bild (Falls du ein eigenes Bild hochlädst)
 # Wenn du ein Bild namens logo.png im Ordner hast, entferne das '#' in der nächsten Zeile:
-# st.image("logo.png", width=200)
+st.image("logo.png", width=200)
 
 st.title("⚡ Trader Intelligence Terminal")
 st.markdown("---")
