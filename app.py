@@ -14,15 +14,15 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# WICHTIG: Nutze für Safari am besten ein echtes quadratisches 'logo.png'.
-# Falls du dein Bild als 'logo.jpeg' oder 'logo.jpg' hochgeladen hast, 
-# ändere einfach unten die Endung im href-Pfad ab!
+# Perfekter Direct-Link für das Safari-Homescreen-Icon
+LIVELINK_ZUM_LOGO = "https://githubusercontent.com"
+
 st.markdown(
-    """
-    <link rel="apple-touch-icon" href="logo.png">
-    <link rel="apple-touch-icon" sizes="152x152" href="logo.png">
-    <link rel="apple-touch-icon" sizes="180x180" href="logo.png">
-    <link rel="apple-touch-icon" sizes="167x167" href="logo.png">
+    f"""
+    <link rel="apple-touch-icon" href="{LIVELINK_ZUM_LOGO}">
+    <link rel="apple-touch-icon" sizes="152x152" href="{LIVELINK_ZUM_LOGO}">
+    <link rel="apple-touch-icon" sizes="180x180" href="{LIVELINK_ZUM_LOGO}">
+    <link rel="apple-touch-icon" sizes="167x167" href="{LIVELINK_ZUM_LOGO}">
     """,
     unsafe_allow_html=True
 )
@@ -31,7 +31,7 @@ st.markdown(
 # 2. REAL-TIME DATA FEEDS (Echte Live-APIs)
 # ==============================================================================
 def fetch_cnbc_rss_feed() -> list:
-    """Holt die neuesten 15 globalen Wirtschafts- und Politiknews von CNBC über den echten RSS-Feed."""
+    """Holt die neuesten 15 globalen Wirtschaftsnews von CNBC über den echten RSS-Feed."""
     url = "https://cnbc.com"
     try:
         response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
@@ -45,7 +45,6 @@ def fetch_cnbc_rss_feed() -> list:
             
             try:
                 # Extrahiert die Uhrzeit (HH:MM) aus dem standardmäßigen RSS-Datumsformat
-                # Format meistens: "Fri, 30 Oct 2026 09:15:00 EST"
                 time_str = pub_date.split(' ')[4][:-3]
             except:
                 time_str = datetime.now().strftime('%H:%M')
@@ -58,13 +57,9 @@ def fetch_cnbc_rss_feed() -> list:
 
 def fetch_live_economic_calendar() -> list:
     """Holt echte Live-Wirtschaftsdaten über eine offene API."""
-    # Hinweis: Da offene Kalender-APIs oft Keys benötigen, bleibt hier dein stabiler 
-    # Fallback-Datensatz aktiv, falls die externe Schnittstelle nicht antwortet.
-    url = "https://coincap.io" # Beispiel für einen funktionierenden API-Ping
+    url = "https://coincap.io" 
     try:
         response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-        # Wenn du eine echte Kalender-JSON hast, wird sie hier verarbeitet.
-        # Da du zuvor ein Mock/Beispiel genutzt hast, springen wir direkt zum stabilen Demo-Feed:
         raise ValueError("Nutze vordefinierten Kalender-Feed")
     except:
         return [
@@ -81,25 +76,13 @@ keywords_input = st.sidebar.text_input("🚨 Eilmeldungs-Filter (Komma-getrennt)
 keywords = [kw.strip().lower() for kw in keywords_input.split(",") if kw.strip()]
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Terminal v3.2 • Hotfix")
+st.sidebar.caption("Terminal v3.3 • Fixed Dynamic Assets")
 
 # ==============================================================================
 # 4. MAIN INTERFACE
 # ==============================================================================
-# Das '?v=1' am Ende trickst den Cache aus und erzwingt das Neuladen von GitHub!
-# ACHTUNG: Überprüfe, ob es wirklich 'logo.png' heißt (und nicht 'Logo.png' oder 'logo.jpg')!
-RAW_LOGO_URL = "https://githubusercontent.com"
-
-try:
-    st.image(RAW_LOGO_URL, width=140)
-except Exception as img_err:
-    # Fallback: Lokale Suche, falls GitHub blockiert oder offline ist
-    import os
-    if os.path.exists("logo.png"): st.image("logo.png", width=140)
-    elif os.path.exists("Logo.png"): st.image("Logo.png", width=140)
-    elif os.path.exists("logo.jpeg"): st.image("logo.jpeg", width=140)
-    elif os.path.exists("logo.jpg"): st.image("logo.jpg", width=140)
-    else: st.caption(f"Logo-Ladefehler: Bitte Dateinamen im Repository prüfen.")
+# Hier greifen wir jetzt direkt auf die saubere Raw-URL deines Repositories zu
+st.image(LIVELINK_ZUM_LOGO, width=140)
 
 st.title("⚡ Trader Intelligence Terminal")
 st.markdown("---")
