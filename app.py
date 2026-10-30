@@ -86,18 +86,20 @@ st.sidebar.caption("Terminal v3.2 • Hotfix")
 # ==============================================================================
 # 4. MAIN INTERFACE
 # ==============================================================================
-# Wir laden das Logo direkt über GitHub Raw, damit es garantiert gefunden wird!
-# Hinweis: Falls dein Dateiname auf GitHub "Logo.png" oder "logo.JPEG" heißt, passe es am Ende der URL an.
+# Das '?v=1' am Ende trickst den Cache aus und erzwingt das Neuladen von GitHub!
+# ACHTUNG: Überprüfe, ob es wirklich 'logo.png' heißt (und nicht 'Logo.png' oder 'logo.jpg')!
 RAW_LOGO_URL = "https://githubusercontent.com"
 
 try:
     st.image(RAW_LOGO_URL, width=140)
-except:
-    # Falls die URL oben fehlschlägt, sucht die App zur Sicherheit lokal weiter
+except Exception as img_err:
+    # Fallback: Lokale Suche, falls GitHub blockiert oder offline ist
     import os
     if os.path.exists("logo.png"): st.image("logo.png", width=140)
+    elif os.path.exists("Logo.png"): st.image("Logo.png", width=140)
     elif os.path.exists("logo.jpeg"): st.image("logo.jpeg", width=140)
     elif os.path.exists("logo.jpg"): st.image("logo.jpg", width=140)
+    else: st.caption(f"Logo-Ladefehler: Bitte Dateinamen im Repository prüfen.")
 
 st.title("⚡ Trader Intelligence Terminal")
 st.markdown("---")
