@@ -1,4 +1,4 @@
-
+import streamlit as st
 import pandas as pd
 import requests
 import xml.etree.ElementTree as ET
@@ -14,23 +14,25 @@ st.caption("Echtzeit-Nachrichten & Smarter Wirtschaftskalender")
 st.sidebar.header("⚙️ Einstellungen & Filter")
 news_keywords = st.sidebar.text_input("News Keywords (Filter)", "Krieg, Verhandlung, Inflation, Fed, Zinsen")
 
-# Reparierte, stabile News-Quelle via Weltnachrichten-RSS Feed
+# Fehlerbereinigte News-Quelle via CNBC RSS Feed
 def get_live_news():
     try:
-        # Wir nutzen einen stabilen globalen Wirtschafts- und Politikfeed
         url = "https://cnbc.com"
         response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
-        root = ET.fromstring(response.content)
+        
+        # FIX: Wir dekodieren den Text explizit als UTF-8 und ignorieren fehlerhafte Zeichen
+        raw_html = response.content.decode('utf-8', errors='ignore')
+        root = ET.fromstring(raw_html)
         
         news_list = []
-        for item in root.findall('.//item')[:15]: # Die neuesten 15 Meldungen
-            titel = item.find('title').text
-            link = item.find('link').text
-            pub_date = item.find('pubDate').text
+        for item in root.findall('.//item')[:15]: 
+            titel = item.find('title').text if item.find('title') is not None else "Kein Titel"
+            link = item.find('link').text if item.find('link') is not None else "#"
+            pub_date = item.find('pubDate').text if item.find('pubDate') is not None else "--:--"
             
-            # Formatiere das Datum auf eine kurze Uhrzeit
+            # Kurze Formatierung der Uhrzeit
             try:
-                zeit = pub_date.split(' ')[4][:5]
+                zeit = " ".join(pub_date.split(' ')[4:5]) # Extrahiert die reine Uhrzeit HH:MM:SS
             except:
                 zeit = "--:--"
                 
@@ -42,9 +44,9 @@ def get_live_news():
             })
         return news_list
     except Exception as e:
-        return [{"zeit": "--:--", "titel": f"Warte auf News-Update... ({str(e)})", "quelle": "System", "link": "#"}]
+        return [{"zeit": "--:--", "titel": f"Warte auf News-Update...", "quelle": "System", "link": "#"}]
 
-# Spalten-Layout für das Dashboard
+# Spalten-Layout für das Dashboard (Zwingend eine 2 übergeben)
 col1, col2 = st.columns(2)
 
 with col1:
