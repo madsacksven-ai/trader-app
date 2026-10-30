@@ -95,11 +95,15 @@ st.sidebar.caption("Terminal v3.1 • Homescreen-Icon Fix")
 # ==============================================================================
 # 4. MAIN INTERFACE
 # ==============================================================================
+# Krisensicheres Laden des Logos als JPEG
 import os
-if os.path.exists("logo.png"):
+if os.path.exists("logo.jpeg"):
+    st.image("logo.jpeg", width=180)
+elif os.path.exists("logo.jpg"):
+    st.image("logo.jpg", width=180)
+elif os.path.exists("logo.png"):
     st.image("logo.png", width=180)
-elif os.path.exists("Logo.png"):
-    st.image("Logo.png", width=180)
+
 
 st.title("⚡ Trader Intelligence Terminal")
 st.markdown("---")
