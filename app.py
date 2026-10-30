@@ -15,7 +15,7 @@ st.set_page_config(
 )
 
 # HIER DIE ENDUNG AUF .jpeg ANPASSEN:
-LIVELINK_ZUM_LOGO = "https://DEIN_STREAMLIT_NAME.streamlit.app/logo.jpeg"
+LIVELINK_ZUM_LOGO = "https://DEIN_STREAMLIT_NAME.streamlit.app/logo.png"
 
 st.markdown(
     f"""
