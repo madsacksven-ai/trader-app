@@ -14,11 +14,17 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Perfekter Direct-Link für das Safari-Homescreen-Icon
+# Wir hängen '?v=2' an, um den hartnäckigen iPhone-Cache zu knacken!
 LIVELINK_ZUM_LOGO = "https://githubusercontent.com"
 
 st.markdown(
     f"""
+    <!-- Sagt Safari, dass die App wie eine native App gestartet werden darf -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Trader Terminal">
+    
+    <!-- Die Icons für den Homescreen -->
     <link rel="apple-touch-icon" href="{LIVELINK_ZUM_LOGO}">
     <link rel="apple-touch-icon" sizes="152x152" href="{LIVELINK_ZUM_LOGO}">
     <link rel="apple-touch-icon" sizes="180x180" href="{LIVELINK_ZUM_LOGO}">
@@ -26,7 +32,6 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
-
 # ==============================================================================
 # 2. REAL-TIME DATA FEEDS (Echte Live-APIs)
 # ==============================================================================
