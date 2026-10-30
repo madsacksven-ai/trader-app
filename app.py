@@ -14,15 +14,17 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# MAGISCHER TRICK FÜR DAS IPHONE ICON:
-# Wir injizieren ein kleines Stück HTML, das Safari zwingt, dein logo.png als App-Symbol zu nehmen.
+# HINWEIS: Ersetze das Wort unten durch deinen echten App-Namen aus der Adresszeile!
+# Beispiel: "https://streamlit.app"
+LIVELINK_ZUM_LOGO = "https://DEIN_STREAMLIT_NAME.streamlit.app/logo.png"
+
 st.markdown(
-    """
+    f"""
     <head>
-        <link rel="apple-touch-icon" href="logo.png">
-        <link rel="apple-touch-icon" sizes="152x152" href="logo.png">
-        <link rel="apple-touch-icon" sizes="180x180" href="logo.png">
-        <link rel="apple-touch-icon" sizes="167x167" href="logo.png">
+        <link rel="apple-touch-icon" href="{LIVELINK_ZUM_LOGO}">
+        <link rel="apple-touch-icon" sizes="152x152" href="{LIVELINK_ZUM_LOGO}">
+        <link rel="apple-touch-icon" sizes="180x180" href="{LIVELINK_ZUM_LOGO}">
+        <link rel="apple-touch-icon" sizes="167x167" href="{LIVELINK_ZUM_LOGO}">
     </head>
     """,
     unsafe_allow_html=True
