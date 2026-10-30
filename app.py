@@ -1,6 +1,7 @@
-import streamlit as st
+
 import pandas as pd
 import requests
+import xml.etree.ElementTree as ET
 from datetime import datetime
 
 # Page Configuration für Trading-Look
@@ -13,22 +14,35 @@ st.caption("Echtzeit-Nachrichten & Smarter Wirtschaftskalender")
 st.sidebar.header("⚙️ Einstellungen & Filter")
 news_keywords = st.sidebar.text_input("News Keywords (Filter)", "Krieg, Verhandlung, Inflation, Fed, Zinsen")
 
-# Kostenlose News-Quelle (Krypto- und Makro-News-Feed)
+# Reparierte, stabile News-Quelle via Weltnachrichten-RSS Feed
 def get_live_news():
     try:
-        url = "https://cryptocompare.com"
-        response = requests.get(url).json()
+        # Wir nutzen einen stabilen globalen Wirtschafts- und Politikfeed
+        url = "https://cnbc.com"
+        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        root = ET.fromstring(response.content)
+        
         news_list = []
-        for item in response["Data"][:15]: # Die neuesten 15 Meldungen
+        for item in root.findall('.//item')[:15]: # Die neuesten 15 Meldungen
+            titel = item.find('title').text
+            link = item.find('link').text
+            pub_date = item.find('pubDate').text
+            
+            # Formatiere das Datum auf eine kurze Uhrzeit
+            try:
+                zeit = pub_date.split(' ')[4][:5]
+            except:
+                zeit = "--:--"
+                
             news_list.append({
-                "zeit": datetime.fromtimestamp(int(item["published_on"])).strftime('%H:%M'),
-                "titel": item["title"],
-                "quelle": item["source_info"]["name"],
-                "link": item["url"]
+                "zeit": zeit,
+                "titel": titel,
+                "quelle": "CNBC Live",
+                "link": link
             })
         return news_list
-    except:
-        return [{"zeit": "--:--", "titel": "Fehler beim Laden der Live-News.", "quelle": "System", "link": "#"}]
+    except Exception as e:
+        return [{"zeit": "--:--", "titel": f"Warte auf News-Update... ({str(e)})", "quelle": "System", "link": "#"}]
 
 # Spalten-Layout für das Dashboard
 col1, col2 = st.columns(2)
