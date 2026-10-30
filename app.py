@@ -14,7 +14,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Wir hängen '?v=2' an, um den hartnäckigen iPhone-Cache zu knacken!
+# Der korrekte, absolute Pfad zu deinem Logo auf den GitHub-Servern
 LIVELINK_ZUM_LOGO = "https://githubusercontent.com"
 
 st.markdown(
@@ -32,6 +32,7 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
 # ==============================================================================
 # 2. REAL-TIME DATA FEEDS (Echte Live-APIs)
 # ==============================================================================
@@ -81,12 +82,12 @@ keywords_input = st.sidebar.text_input("🚨 Eilmeldungs-Filter (Komma-getrennt)
 keywords = [kw.strip().lower() for kw in keywords_input.split(",") if kw.strip()]
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Terminal v3.3 • Fixed Dynamic Assets")
+st.sidebar.caption("Terminal v3.4 • Verified Assets")
 
 # ==============================================================================
 # 4. MAIN INTERFACE
 # ==============================================================================
-# Hier greifen wir jetzt direkt auf die saubere Raw-URL deines Repositories zu
+# Bild direkt über die Raw-URL einbinden
 st.image(LIVELINK_ZUM_LOGO, width=140)
 
 st.title("⚡ Trader Intelligence Terminal")
