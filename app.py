@@ -5,7 +5,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 
 # ==============================================================================
-# 1. APP CONFIGURATION & IPHONE HOMESCREEN ICON
+# 1. APP CONFIGURATION & IPHONE HOMESCREEN ICON FIX FOR JPEG
 # ==============================================================================
 st.set_page_config(
     page_title="Trader Intelligence Terminal",
@@ -14,9 +14,8 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# HINWEIS: Ersetze das Wort unten durch deinen echten App-Namen aus der Adresszeile!
-# Beispiel: "https://streamlit.app"
-LIVELINK_ZUM_LOGO = "https://DEIN_STREAMLIT_NAME.streamlit.app/logo.png"
+# HIER DIE ENDUNG AUF .jpeg ANPASSEN:
+LIVELINK_ZUM_LOGO = "https://DEIN_STREAMLIT_NAME.streamlit.app/logo.jpeg"
 
 st.markdown(
     f"""
@@ -29,6 +28,7 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
 
 # ==============================================================================
 # 2. REAL-TIME DATA FEEDS (Echte Live-APIs)
