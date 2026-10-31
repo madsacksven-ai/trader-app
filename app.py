@@ -15,9 +15,9 @@ import streamlit as st
 import yfinance as yf
 
 try:
-    from deep_translator import GoogleTranslator
+    from deep_translator import DeeplTranslator, GoogleTranslator, MyMemoryTranslator
 except Exception:  # Paket fehlt -> App läuft ohne Übersetzung weiter
-    GoogleTranslator = None
+    DeeplTranslator = GoogleTranslator = MyMemoryTranslator = None
 
 # ==============================================================================
 # 1. GRUNDEINSTELLUNGEN
@@ -216,54 +216,105 @@ def load_zones() -> list:
 # ==============================================================================
 # 3. ÜBERSETZUNG (Englisch -> Deutsch)
 # ==============================================================================
-TRANSLATION_OK = GoogleTranslator is not None  # wird False, wenn die Übersetzung gerade scheitert
+def _secret(name: str):
+    """Optionaler Schlüssel aus den Streamlit-Secrets (fehlt er, wird er übersprungen)."""
+    try:
+        return st.secrets.get(name)
+    except Exception:
+        return None
+
+
+def translators() -> list:
+    """Übersetzer in der Reihenfolge, in der sie probiert werden: (Name, Erzeuger, max. Zeichen)."""
+    if GoogleTranslator is None:
+        return []
+    chain = []
+    deepl_key = _secret("DEEPL_API_KEY")
+    if deepl_key:
+        chain.append(("DeepL", lambda: DeeplTranslator(api_key=deepl_key, source="en", target="de",
+                                                       use_free_api=True), 4500))
+    chain.append(("Google", lambda: GoogleTranslator(source="en", target="de"), 4500))
+    email = _secret("MYMEMORY_EMAIL")  # optional: erhöht das kostenlose Tageslimit von MyMemory
+    chain.append(("MyMemory", lambda: MyMemoryTranslator(source="en-GB", target="de-DE",
+                                                         **({"email": email} if email else {})), 480))
+    return chain
+
+
+def split_text(text: str, max_len: int) -> list:
+    """Langen Text an Absätzen, Sätzen und notfalls Wörtern in Stücke teilen – ohne etwas abzuschneiden."""
+    if len(text) <= max_len:
+        return [text]
+    pieces = []
+    for sent in re.split(r"(?<=[.!?])\s+|\n+", text):
+        while len(sent) > max_len:  # sehr langer Satz: an einem Leerzeichen trennen
+            cut = sent.rfind(" ", 0, max_len)
+            cut = cut if cut > 0 else max_len
+            pieces.append(sent[:cut])
+            sent = sent[cut:].strip()
+        if sent:
+            pieces.append(sent)
+    parts, cur = [], ""
+    for piece in pieces:
+        if cur and len(cur) + len(piece) + 1 > max_len:
+            parts.append(cur)
+            cur = piece
+        else:
+            cur = f"{cur} {piece}".strip()
+    if cur:
+        parts.append(cur)
+    return parts
+
+
+def _set_status(text: str):
+    try:
+        st.session_state["tr_status"] = text
+    except Exception:
+        pass
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def _translate_cached(text: str) -> str:
-    """Nur ERFOLGREICHE Übersetzungen werden gespeichert – Fehler werfen eine Ausnahme."""
-    out = GoogleTranslator(source="en", target="de").translate(text[:4800])
-    if not out:
-        raise ValueError("leere Übersetzung")
-    return out
+    """Probiert alle Übersetzer nacheinander. Nur Erfolge werden 24 Std. gespeichert."""
+    errors = []
+    for name, make, max_len in translators():
+        try:
+            tr = make()
+            out = " ".join((tr.translate(chunk) or "") for chunk in split_text(text, max_len)).strip()
+            if not out:
+                raise ValueError("leere Antwort")
+            if len(text) > 25 and out.strip().lower() == text.strip().lower():
+                raise ValueError("unverändert zurückgegeben")
+            _set_status(f"✓ {name}")
+            return out
+        except Exception as ex:
+            errors.append(f"{name}: {type(ex).__name__} {str(ex)[:80]}")
+    _set_status("✗ " + " | ".join(errors) if errors else "✗ kein Übersetzer verfügbar")
+    raise RuntimeError("keine Übersetzung möglich")
 
 
 def translate_text(text: str) -> str:
-    global TRANSLATION_OK
     if not text or GoogleTranslator is None:
         return text
     try:
         return _translate_cached(text)
     except Exception:
-        TRANSLATION_OK = False
         return text  # Rückfall: Original, beim nächsten Laden neuer Versuch
 
 
 def translate_many(texts: tuple) -> list:
-    """Übersetzt viele kurze Texte (Schlagzeilen) in EINER Anfrage, sonst einzeln."""
-    if not texts or GoogleTranslator is None:
-        return list(texts)
-    joined = "\n".join(t.replace("\n", " ") for t in texts)
-    out = translate_text(joined)
-    if out != joined:
-        parts = [x.strip() for x in out.split("\n") if x.strip()]
-        if len(parts) == len(texts):
-            return parts
+    """Schlagzeilen einzeln übersetzen (jede wird 24 Std. gespeichert)."""
     return [translate_text(t) for t in texts]
 
 
 def translate_paragraphs(paragraphs: list) -> list:
-    """Längere Texte in Stücken unter 4500 Zeichen übersetzen."""
-    result, chunk = [], []
-    for p in paragraphs + [None]:
-        if p is None or sum(len(x) for x in chunk) + len(p) > 4500:
-            if chunk:
-                out = translate_text("\n\n".join(chunk))
-                result.extend([x.strip() for x in out.split("\n\n") if x.strip()])
-                chunk = []
-        if p is not None:
-            chunk.append(p)
-    return result
+    """Artikeltext übersetzen: erst gesammelt, wenn die Absätze dabei verloren gehen, einzeln."""
+    joined = "\n\n".join(paragraphs)
+    if len(joined) <= 4500:
+        out = translate_text(joined)
+        parts = [x.strip() for x in out.split("\n\n") if x.strip()]
+        if out != joined and len(parts) == len(paragraphs):
+            return parts
+    return [translate_text(p) for p in paragraphs]
 
 
 # ==============================================================================
@@ -677,8 +728,7 @@ keywords_input = st.sidebar.text_input(
 keywords = [k.strip().lower() for k in keywords_input.split(",") if k.strip()]
 if st.sidebar.button("🔄 Alles aktualisieren"):
     st.cache_data.clear()
-st.sidebar.caption("Übersetzung: " + ("✓ aktiv" if GoogleTranslator is not None else
-                   "✗ Paket fehlt – requirements.txt prüfen"))
+tr_status_slot = st.sidebar.empty()  # wird am Ende mit dem Übersetzungs-Status befüllt
 st.sidebar.caption("Kursdaten: Yahoo Finance (verzögert) · News: CNBC · Kalender: ForexFactory · "
                    "Übersetzung: Google Translate")
 
@@ -705,7 +755,9 @@ intraday = load_prices("5m", "2d")
 daily = load_prices("1d", "1y")
 prev_close = float(daily["Close"].iloc[-2]) if len(daily) >= 2 else None
 vwap_intraday = session_vwap(intraday)
-news = add_translations(load_news())
+news = load_news()
+for _n in news:
+    _n.setdefault("title_de", _n["title"])
 calendar, calendar_source = load_calendar()
 
 col_chart, col_analysis = st.columns([2.2, 1], gap="small")
@@ -978,6 +1030,9 @@ with col_news:
         gallery = rest[2:]
         idx = st.session_state.get("gal_idx", 0) % len(gallery) if gallery else 0
 
+        # Nur die sichtbaren Meldungen übersetzen (schneller, schont das Übersetzungs-Kontingent)
+        add_translations([top] + rest[:2] + ([gallery[idx]] if gallery else []))
+
         # Kopfzeilen der großen Karten (per CSS über dem Titel eingeblendet)
         card_css = f'div.st-key-news_top button::before {{ content:"TOP-MELDUNG · {css_text(t(top))}"; }}'
         if gallery:
@@ -1017,6 +1072,12 @@ with col_news:
                     if st.button("Weiter ›", key="gal_next"):
                         st.session_state["gal_idx"] = (idx + 1) % len(gallery)
                         st.rerun()
+
+# Übersetzungs-Status in der Sidebar (zeigt, welcher Übersetzer arbeitet oder warum es scheitert)
+if GoogleTranslator is None:
+    tr_status_slot.caption("Übersetzung: ✗ Paket fehlt – requirements.txt prüfen")
+else:
+    tr_status_slot.caption("Übersetzung: " + st.session_state.get("tr_status", "✓ aus Zwischenspeicher"))
 
 # ==============================================================================
 # 15. AUTOMATISCHE AKTUALISIERUNG
