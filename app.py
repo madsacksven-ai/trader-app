@@ -1,6 +1,8 @@
+import csv
 import html
 import re
 from datetime import datetime
+from pathlib import Path
 from email.utils import parsedate_to_datetime
 from zoneinfo import ZoneInfo
 import xml.etree.ElementTree as ET
@@ -74,27 +76,26 @@ h1, h2, h3 {{ margin: 0 !important; }}
 .tt-muted {{ color:#9aa4b2; }}
 .tt-imp {{ font-size:9px; display:block; }}
 .tt-vals {{ font-size:10px; line-height:1.3; }}
-.tt-top {{ display:block; background:#1a1f12; border:1px solid {AMBER}; border-radius:12px 12px 0 0; padding:10px 12px; color:#e6e9ef; }}
-.tt-top .tt-meta, .tt-gcard .tt-meta {{ display:flex; justify-content:space-between; font-size:10px; font-weight:700; }}
-.tt-top .tt-hl {{ font-size:14px; font-weight:600; line-height:1.35; margin-top:4px; display:block; }}
-.tt-gcard {{ background:#131822; border:1px solid #232a36; border-radius:12px 12px 0 0; padding:10px 12px; display:flex; flex-direction:column; gap:6px; color:#e6e9ef; min-height:92px; }}
-.tt-gcard .tt-hl {{ font-size:13px; font-weight:600; line-height:1.35; }}
 .tt-note {{ font-size:10px; color:#8a94a3; }}
 
 /* Analyse-Zeitraum und Chart-Zeitrahmen als kleine Schalter */
 div[data-testid="stRadio"] label p {{ font-size:12px; }}
 div[data-testid="stRadio"] > div {{ gap:4px; }}
 
-/* Buttons im News-Bereich wie Karten aussehen lassen */
-div[class*="st-key-nline_"] button {{
+/* News-Karten sind selbst Buttons: antippen = Artikel öffnen */
+div[class*="st-key-nline_"] button, div.st-key-news_top button, div.st-key-gal_card button {{
   width:100%; justify-content:flex-start; text-align:left; background:#131822;
-  border:1px solid #232a36; border-radius:10px; padding:6px 10px; min-height:40px; color:#e6e9ef; }}
-div[class*="st-key-nline_"] button p {{ font-size:12px; text-align:left; line-height:1.35; }}
+  border:1px solid #232a36; border-radius:10px; padding:7px 10px; min-height:42px; color:#e6e9ef; }}
+div[class*="st-key-nline_"] button p, div.st-key-gal_card button p {{ font-size:12px; text-align:left; line-height:1.35; }}
 div[class*="st-key-nline_kw"] button {{ border-color:{AMBER}; }}
-div.st-key-open_top button, div.st-key-gal_open button {{
-  width:100%; background:#0f131b; border:1px solid {AMBER}; border-top:none; border-radius:0 0 12px 12px;
-  color:#7cc4ff; min-height:40px; }}
-div.st-key-gal_open button {{ border-color:#232a36; }}
+div.st-key-news_top button, div.st-key-gal_card button {{ flex-direction:column; align-items:flex-start; gap:4px; border-radius:12px; padding:10px 12px; }}
+div.st-key-news_top button {{ background:#1a1f12; border-color:{AMBER}; }}
+div.st-key-news_top button p {{ font-size:14px; font-weight:600; text-align:left; line-height:1.35; }}
+div.st-key-news_top button::before, div.st-key-gal_card button::before {{
+  display:block; font-size:10px; font-weight:700; letter-spacing:0.03em; }}
+div.st-key-news_top button::before {{ color:{AMBER}; }}
+div.st-key-gal_card button::before {{ color:#9aa4b2; }}
+div.st-key-gal_card button {{ min-height:84px; }}
 div.st-key-galnav div[data-testid="stHorizontalBlock"] {{ flex-wrap:nowrap !important; gap:6px; }}
 div.st-key-galnav div[data-testid="stColumn"] {{ min-width:0 !important; width:auto !important; flex:1 1 0 !important; }}
 div.st-key-galnav button {{ width:100%; min-height:40px; background:#131822; border:1px solid #2a3344; color:#e6e9ef; }}
@@ -126,6 +127,64 @@ def md_arrow(score: int) -> str:
     if score < 0:
         return ":red[▼]"
     return ":gray[●]"
+
+
+def md_safe(text: str) -> str:
+    """Zeichen entschärfen, die Streamlit sonst als Formatierung liest (z. B. $ als Formel)."""
+    for ch in ["\\", "$", "*", "_", "`", "[", "]", "#", "~"]:
+        text = text.replace(ch, "\\" + ch)
+    return text
+
+
+def css_text(text: str) -> str:
+    """Text sicher für CSS content:"…" machen."""
+    return text.replace("\\", "\\\\").replace('"', '\\"').replace("<", "")
+
+
+# ==============================================================================
+# MEINE ZONEN (aus der Datei zones.csv im GitHub-Repo)
+# ==============================================================================
+ZONE_COLORS = {
+    "gruen": "52,211,153", "grün": "52,211,153", "rot": "248,113,113", "blau": "124,196,255",
+    "gelb": "245,181,68", "orange": "251,146,60", "grau": "156,163,175", "lila": "192,132,252",
+}
+
+
+def to_price(val: str):
+    s = (val or "").strip().replace(" ", "")
+    if not s:
+        return None
+    if "," in s and "." in s:      # 21.050,5 -> 21050.5
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:                 # 21050,5 -> 21050.5
+        s = s.replace(",", ".")
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def load_zones() -> list:
+    """Liest zones.csv: Name;Von;Bis;Farbe (Von = Bis ergibt eine Linie)."""
+    path = Path(__file__).parent / "zones.csv"
+    if not path.exists():
+        return []
+    zones = []
+    try:
+        with path.open(encoding="utf-8-sig") as f:
+            for row in csv.reader(f, delimiter=";"):
+                if len(row) < 2 or row[0].strip().lower() in ("name", "") or row[0].startswith("#"):
+                    continue
+                lo = to_price(row[1])
+                hi = to_price(row[2]) if len(row) > 2 else lo
+                hi = lo if hi is None else hi
+                if lo is None:
+                    continue
+                rgb = ZONE_COLORS.get(row[3].strip().lower() if len(row) > 3 else "", ZONE_COLORS["blau"])
+                zones.append({"name": row[0].strip(), "lo": min(lo, hi), "hi": max(lo, hi), "rgb": rgb})
+    except Exception:
+        return []
+    return zones
 
 
 # ==============================================================================
@@ -612,6 +671,22 @@ with col_chart:
             fig.add_hline(y=prev_close, line=dict(color="#5b6578", width=1, dash="dash"),
                           annotation_text="Vortagesschluss", annotation_font_size=10,
                           annotation_font_color="#9aa4b2", annotation_position="bottom right")
+        # Eigene Zonen und Linien aus zones.csv
+        y_lo, y_hi = float(show["Low"].min()), float(show["High"].max())
+        pad = (y_hi - y_lo) * 0.06 or 10
+        for z in load_zones():
+            if z["hi"] < y_lo - pad or z["lo"] > y_hi + pad:
+                continue  # Zone liegt außerhalb des sichtbaren Bereichs
+            if z["hi"] - z["lo"] < 0.01:
+                fig.add_hline(y=z["lo"], line=dict(color=f"rgba({z['rgb']},0.9)", width=1.5),
+                              annotation_text=z["name"], annotation_position="top left",
+                              annotation_font_size=10, annotation_font_color=f"rgb({z['rgb']})")
+            else:
+                fig.add_hrect(y0=z["lo"], y1=z["hi"], fillcolor=f"rgba({z['rgb']},0.15)",
+                              line=dict(color=f"rgba({z['rgb']},0.6)", width=1),
+                              annotation_text=z["name"], annotation_position="top left",
+                              annotation_font_size=10, annotation_font_color=f"rgb({z['rgb']})")
+
         fig.add_annotation(
             xref="paper", yref="paper", x=0.01, y=0.98, xanchor="left", yanchor="top",
             text=f"<span style='font-size:10px'>{horizon_word}-BIAS</span><br><b>{arrow} {label}</b>",
@@ -624,7 +699,7 @@ with col_chart:
             paper_bgcolor="#0f131b", plot_bgcolor="#0f131b",
             font=dict(color="#9aa4b2", size=10), xaxis_rangeslider_visible=False,
             xaxis=dict(gridcolor="#1c2230", rangebreaks=breaks),
-            yaxis=dict(gridcolor="#1c2230", side="right"),
+            yaxis=dict(gridcolor="#1c2230", side="right", range=[y_lo - pad, y_hi + pad]),
             dragmode=False,
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
@@ -684,43 +759,40 @@ with col_news:
         def t(n):
             return f"{n['dt']:%H:%M}" if n["dt"] else "--:--"
 
-        def tag(s):
-            a, l, c = bias_style(s)
-            return f'<span style="color:{c}">{a} {l.upper()}</span>'
-
         # Top-Meldung: neueste mit Stichwort, sonst die neueste überhaupt
         top = next((n for n in news if has_kw(n)), news[0])
         rest = [n for n in news if n is not top]
+        gallery = rest[2:]
+        idx = st.session_state.get("gal_idx", 0) % len(gallery) if gallery else 0
 
-        st.markdown(
-            f'<div class="tt-top"><span class="tt-meta"><span style="color:{AMBER}">TOP-MELDUNG · {t(top)}</span>'
-            f'{tag(top["score"])}</span><span class="tt-hl">{e(top["title_de"])}</span></div>',
-            unsafe_allow_html=True,
-        )
-        if st.button("Meldung lesen", key="open_top"):
+        # Kopfzeilen der großen Karten (per CSS über dem Titel eingeblendet)
+        card_css = f'div.st-key-news_top button::before {{ content:"TOP-MELDUNG · {css_text(t(top))}"; }}'
+        if gallery:
+            g = gallery[idx]
+            dots = "●" * abs(g["score"]) + "○" * (2 - abs(g["score"]))
+            card_css += (f' div.st-key-gal_card button::before {{ content:"CNBC · {css_text(t(g))} · Stärke {dots}"; }}')
+            if has_kw(g):
+                card_css += f" div.st-key-gal_card button {{ border-color:{AMBER}; }}"
+        st.markdown(f"<style>{card_css}</style>", unsafe_allow_html=True)
+
+        # Antippen der Karte öffnet direkt den Artikel – Pfeil immer vorne
+        if st.button(f"{md_arrow(top['score'])}  {md_safe(top['title_de'])}", key="news_top"):
             show_article(top)
 
         # Zwei weitere Meldungen als kompakte Zeilen
         for i, n in enumerate(rest[:2]):
             key = f"nline_kw_{i}" if has_kw(n) else f"nline_{i}"
-            if st.button(f"{md_arrow(n['score'])}  {n['title_de']}  ·  {t(n)}", key=key):
+            if st.button(f"{md_arrow(n['score'])}  {md_safe(n['title_de'])}  ·  {t(n)}", key=key):
                 show_article(n)
 
         # Galerie: eine Karte, mit ‹ und › weiterblättern
-        gallery = rest[2:]
         if gallery:
-            idx = st.session_state.get("gal_idx", 0) % len(gallery)
-            g = gallery[idx]
-            dots = "●" * abs(g["score"]) + "○" * (2 - abs(g["score"]))
-            border = f' style="border-color:{AMBER}"' if has_kw(g) else ""
             st.markdown(
-                f'<div class="tt-h2" style="margin-top:10px">Weitere Meldungen <span>{idx + 1} / {len(gallery)}</span></div>'
-                f'<div class="tt-gcard"{border}><span class="tt-meta"><span class="tt-muted">CNBC · {t(g)}</span>'
-                f'{tag(g["score"])}</span><span class="tt-hl">{e(g["title_de"])}</span>'
-                f'<span class="tt-muted" style="font-size:10px">Stärke {dots}</span></div>',
+                f'<div class="tt-h2" style="margin-top:10px">Weitere Meldungen '
+                f'<span>{idx + 1} / {len(gallery)}</span></div>',
                 unsafe_allow_html=True,
             )
-            if st.button("Meldung lesen", key="gal_open"):
+            if st.button(f"{md_arrow(g['score'])}  {md_safe(g['title_de'])}", key="gal_card"):
                 show_article(g)
             with st.container(key="galnav"):
                 prev_col, next_col = st.columns(2)
