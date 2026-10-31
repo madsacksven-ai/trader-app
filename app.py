@@ -76,6 +76,7 @@ h1, h2, h3 {{ margin: 0 !important; }}
 .tt-scn {{ display:flex; justify-content:space-between; gap:8px; font-size:12px; padding:5px 8px;
   background:#0f131b; border-radius:8px; margin-top:4px; color:#c3c9d3; }}
 .tt-result {{ margin-top:8px; padding:8px 10px; border:1px solid; border-radius:8px; font-size:14px; font-weight:700; }}
+.tt-ist {{ display:inline-block; padding:0 4px; border:1px solid; border-radius:4px; font-weight:700; }}
 .tt-res-vals {{ display:block; font-size:11px; font-weight:400; color:#c3c9d3; margin-top:3px; }}
 .tt-row.tt-hd {{ font-size:9px; color:#8a94a3; padding:6px 10px; }}
 .tt-mono {{ font-family:'JetBrains Mono', ui-monospace, monospace; }}
@@ -918,15 +919,26 @@ with col_cal:
             day = "" if ev["dt"].date() == today else f"{de_day(ev['dt'])} "
             released = ev["actual"] not in ("–", "")
             hint = direction_hint(ev["direction"]) if not released else ""
+            # Eine Farbe für alles: Pfeil, Terminname und Ist-Wert (grün = bullisch, rot = bärisch für den NQ)
+            title_col = c if released and ev["signal"] != 0 else "#e6e9ef"
+            if released and ev["signal"] != 0:
+                actual_html = (f'<b class="tt-ist" style="color:{c};border-color:{c};'
+                               f'background:{"rgba(52,211,153,0.14)" if ev["signal"] > 0 else "rgba(248,113,113,0.14)"}">'
+                               f'{e(ev["actual"])}</b>')
+            elif released:
+                actual_html = f'<b class="tt-ist" style="color:{NEUTRAL};border-color:#3a4456">{e(ev["actual"])}</b>'
+            else:
+                actual_html = '<b class="tt-muted">–</b>'
             rows.append(
-                f'<div class="tt-row"><span style="color:{c};font-weight:700">{a}</span>'
+                f'<div class="tt-row"><span style="color:{c};font-weight:700;font-size:13px">{a}</span>'
                 f'<span class="tt-mono tt-muted">{day}{ev["dt"]:%H:%M}</span>'
-                f'<span><b style="font-weight:600">{e(ev["title"])}</b>{" " + WARN if ev["ambiguous"] else ""}'
+                f'<span><b style="font-weight:600;color:{title_col}">{e(ev["title"])}</b>'
+                f'{" " + WARN if ev["ambiguous"] else ""}'
                 f'<span class="tt-imp"><span style="color:{dcol}">{dots}</span>'
                 + (f' <span class="tt-muted">· {hint}</span>' if hint else "")
                 + '</span></span>'
                 f'<span class="tt-mono tt-vals"><span class="tt-muted">{e(ev["previous"])}</span> / '
-                f'{e(ev["forecast"])} / <b style="color:{c if released else "#e6e9ef"}">{e(ev["actual"])}</b></span></div>'
+                f'{e(ev["forecast"])} / {actual_html}</span></div>'
             )
         st.markdown(f'<div class="tt-cal">{"".join(rows)}</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="tt-note" style="margin-top:4px">▲ bullisch / ▼ bärisch für den NQ · '
