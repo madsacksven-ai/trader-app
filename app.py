@@ -216,31 +216,40 @@ def load_zones() -> list:
 # ==============================================================================
 # 3. ÜBERSETZUNG (Englisch -> Deutsch)
 # ==============================================================================
+TRANSLATION_OK = GoogleTranslator is not None  # wird False, wenn die Übersetzung gerade scheitert
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
+def _translate_cached(text: str) -> str:
+    """Nur ERFOLGREICHE Übersetzungen werden gespeichert – Fehler werfen eine Ausnahme."""
+    out = GoogleTranslator(source="en", target="de").translate(text[:4800])
+    if not out:
+        raise ValueError("leere Übersetzung")
+    return out
+
+
 def translate_text(text: str) -> str:
+    global TRANSLATION_OK
     if not text or GoogleTranslator is None:
         return text
     try:
-        out = GoogleTranslator(source="en", target="de").translate(text[:4800])
-        return out or text
+        return _translate_cached(text)
     except Exception:
-        return text
+        TRANSLATION_OK = False
+        return text  # Rückfall: Original, beim nächsten Laden neuer Versuch
 
 
-@st.cache_data(ttl=86400, show_spinner=False)
 def translate_many(texts: tuple) -> list:
-    """Übersetzt viele kurze Texte (Schlagzeilen) in EINER Anfrage."""
+    """Übersetzt viele kurze Texte (Schlagzeilen) in EINER Anfrage, sonst einzeln."""
     if not texts or GoogleTranslator is None:
         return list(texts)
-    try:
-        joined = "\n".join(t.replace("\n", " ") for t in texts)
-        out = GoogleTranslator(source="en", target="de").translate(joined[:4800]) or ""
-        parts = [p.strip() for p in out.split("\n") if p.strip()]
+    joined = "\n".join(t.replace("\n", " ") for t in texts)
+    out = translate_text(joined)
+    if out != joined:
+        parts = [x.strip() for x in out.split("\n") if x.strip()]
         if len(parts) == len(texts):
             return parts
-    except Exception:
-        pass
-    return [translate_text(t) for t in texts]  # Rückfall: einzeln übersetzen
+    return [translate_text(t) for t in texts]
 
 
 def translate_paragraphs(paragraphs: list) -> list:
@@ -342,9 +351,11 @@ def load_news() -> list:
                 "score": news_score(title),  # Einschätzung anhand der englischen Originalwörter
             })
     items.sort(key=lambda x: x["dt"] or datetime.min.replace(tzinfo=BERLIN), reverse=True)
-    items = items[:25]
+    return items[:25]
 
-    # Schlagzeilen gesammelt ins Deutsche übersetzen
+
+def add_translations(items: list) -> list:
+    """Schlagzeilen ins Deutsche übersetzen (erfolgreiche Übersetzungen werden 24 Std. gespeichert)."""
     titles_de = translate_many(tuple(n["title"] for n in items))
     for n, de in zip(items, titles_de):
         n["title_de"] = de
@@ -666,6 +677,8 @@ keywords_input = st.sidebar.text_input(
 keywords = [k.strip().lower() for k in keywords_input.split(",") if k.strip()]
 if st.sidebar.button("🔄 Alles aktualisieren"):
     st.cache_data.clear()
+st.sidebar.caption("Übersetzung: " + ("✓ aktiv" if GoogleTranslator is not None else
+                   "✗ Paket fehlt – requirements.txt prüfen"))
 st.sidebar.caption("Kursdaten: Yahoo Finance (verzögert) · News: CNBC · Kalender: ForexFactory · "
                    "Übersetzung: Google Translate")
 
@@ -692,7 +705,7 @@ intraday = load_prices("5m", "2d")
 daily = load_prices("1d", "1y")
 prev_close = float(daily["Close"].iloc[-2]) if len(daily) >= 2 else None
 vwap_intraday = session_vwap(intraday)
-news = load_news()
+news = add_translations(load_news())
 calendar, calendar_source = load_calendar()
 
 col_chart, col_analysis = st.columns([2.2, 1], gap="small")
