@@ -4,17 +4,31 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Trader Terminal">
   <link rel="apple-touch-icon" href="logo.png">
+  <link rel="icon" type="image/png" href="logo.png">
   <title>Trader Intelligence Terminal</title>
   <style>
-    html, body { margin: 0; padding: 0; height: 100%; width: 100%; background: #0e1117; overflow: hidden; }
-    iframe { border: 0; width: 100%; height: 100%; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      width: 100%;
+      background: #0e1117;
+      overflow: hidden;
+    }
+    iframe {
+      border: 0;
+      width: 100%;
+      height: 100%;
+      padding-top: env(safe-area-inset-top);
+      box-sizing: border-box;
+    }
   </style>
 </head>
 <body>
-  <!-- Hier ist deine echte Streamlit-URL mit Einbettungs-Parameter hinterlegt -->
-  <iframe src="https://madsacksven-ai-trader-app.streamlit.app/?embed=true"></iframe>
+  <iframe src="https://trader-app-gtc8ew7fs8vmpqnmvvwtkn.streamlit.app/?embed=true"></iframe>
 </body>
 </html>
