@@ -1,5 +1,6 @@
 import html
-from datetime import datetime, timedelta
+import re
+from datetime import datetime
 from email.utils import parsedate_to_datetime
 from zoneinfo import ZoneInfo
 import xml.etree.ElementTree as ET
@@ -9,6 +10,11 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 import yfinance as yf
+
+try:
+    from deep_translator import GoogleTranslator
+except Exception:  # Paket fehlt -> App läuft ohne Übersetzung weiter
+    GoogleTranslator = None
 
 # ==============================================================================
 # 1. GRUNDEINSTELLUNGEN
@@ -55,7 +61,7 @@ h1, h2, h3 {{ margin: 0 !important; }}
 .tt-h2 {{ font-size:13px; font-weight:700; color:#e6e9ef; display:flex; justify-content:space-between; align-items:baseline; margin:8px 0 6px; }}
 .tt-h2 span {{ font-size:10px; font-weight:400; color:#9aa4b2; }}
 .tt-card {{ background:#131822; border:1px solid #232a36; border-radius:12px; padding:10px 12px; }}
-.tt-pills {{ display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:6px; margin:8px 0; }}
+.tt-pills {{ display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:6px; margin:8px 0 2px; }}
 .tt-pill {{ background:#0f131b; border-radius:8px; padding:7px 8px; font-size:11px; color:#9aa4b2; }}
 .tt-pill b {{ display:block; font-size:12px; margin-top:2px; }}
 .tt-bars {{ display:flex; gap:3px; align-items:center; font-size:12px; color:#9aa4b2; justify-content:space-between; }}
@@ -68,19 +74,30 @@ h1, h2, h3 {{ margin: 0 !important; }}
 .tt-muted {{ color:#9aa4b2; }}
 .tt-imp {{ font-size:9px; display:block; }}
 .tt-vals {{ font-size:10px; line-height:1.3; }}
-.tt-top {{ display:block; text-decoration:none !important; background:#1a1f12; border:1px solid {AMBER}; border-radius:12px; padding:10px 12px; color:#e6e9ef !important; margin-bottom:6px; }}
-.tt-top .tt-meta {{ display:flex; justify-content:space-between; font-size:10px; font-weight:700; }}
+.tt-top {{ display:block; background:#1a1f12; border:1px solid {AMBER}; border-radius:12px 12px 0 0; padding:10px 12px; color:#e6e9ef; }}
+.tt-top .tt-meta, .tt-gcard .tt-meta {{ display:flex; justify-content:space-between; font-size:10px; font-weight:700; }}
 .tt-top .tt-hl {{ font-size:14px; font-weight:600; line-height:1.35; margin-top:4px; display:block; }}
-.tt-line {{ display:flex; gap:8px; align-items:flex-start; text-decoration:none !important; background:#131822; border:1px solid #232a36; border-radius:10px; padding:7px 10px; color:#e6e9ef !important; margin-bottom:6px; font-size:12px; }}
-.tt-line .tt-hl {{ font-weight:600; flex:1; line-height:1.35; }}
-.tt-kw {{ border-color:{AMBER} !important; }}
-.tt-gal-hint {{ font-size:11px; color:#9aa4b2; margin:6px 0 4px; display:flex; justify-content:space-between; }}
-.tt-gal {{ display:flex; gap:10px; overflow-x:auto; scroll-snap-type:x mandatory; -webkit-overflow-scrolling:touch; padding-bottom:6px; }}
-.tt-gcard {{ flex:0 0 260px; scroll-snap-align:start; background:#131822; border:1px solid #232a36; border-radius:12px; padding:10px 11px; display:flex; flex-direction:column; gap:7px; color:#e6e9ef; }}
-.tt-gcard .tt-meta {{ display:flex; justify-content:space-between; font-size:10px; }}
+.tt-gcard {{ background:#131822; border:1px solid #232a36; border-radius:12px 12px 0 0; padding:10px 12px; display:flex; flex-direction:column; gap:6px; color:#e6e9ef; min-height:92px; }}
 .tt-gcard .tt-hl {{ font-size:13px; font-weight:600; line-height:1.35; }}
-.tt-gcard a {{ font-size:11px; font-weight:600; color:#7cc4ff !important; }}
 .tt-note {{ font-size:10px; color:#8a94a3; }}
+
+/* Analyse-Zeitraum und Chart-Zeitrahmen als kleine Schalter */
+div[data-testid="stRadio"] label p {{ font-size:12px; }}
+div[data-testid="stRadio"] > div {{ gap:4px; }}
+
+/* Buttons im News-Bereich wie Karten aussehen lassen */
+div[class*="st-key-nline_"] button {{
+  width:100%; justify-content:flex-start; text-align:left; background:#131822;
+  border:1px solid #232a36; border-radius:10px; padding:6px 10px; min-height:40px; color:#e6e9ef; }}
+div[class*="st-key-nline_"] button p {{ font-size:12px; text-align:left; line-height:1.35; }}
+div[class*="st-key-nline_kw"] button {{ border-color:{AMBER}; }}
+div.st-key-open_top button, div.st-key-gal_open button {{
+  width:100%; background:#0f131b; border:1px solid {AMBER}; border-top:none; border-radius:0 0 12px 12px;
+  color:#7cc4ff; min-height:40px; }}
+div.st-key-gal_open button {{ border-color:#232a36; }}
+div.st-key-galnav div[data-testid="stHorizontalBlock"] {{ flex-wrap:nowrap !important; gap:6px; }}
+div.st-key-galnav div[data-testid="stColumn"] {{ min-width:0 !important; width:auto !important; flex:1 1 0 !important; }}
+div.st-key-galnav button {{ width:100%; min-height:40px; background:#131822; border:1px solid #2a3344; color:#e6e9ef; }}
 div[data-testid="stExpander"] details {{ background:#0f131b; border:1px solid #232a36; border-radius:10px; }}
 div[data-testid="stExpander"] summary p {{ font-size:12px; font-weight:600; }}
 </style>
@@ -102,10 +119,63 @@ def bias_style(score: int):
     return "●", "Neutral", NEUTRAL
 
 
+def md_arrow(score: int) -> str:
+    """Farbiger Pfeil für Button-Beschriftungen."""
+    if score > 0:
+        return ":green[▲]"
+    if score < 0:
+        return ":red[▼]"
+    return ":gray[●]"
+
+
 # ==============================================================================
-# 3. DATEN: KURSE
+# 3. ÜBERSETZUNG (Englisch -> Deutsch)
 # ==============================================================================
-TIMEFRAMES = {"5m": ("5m", "2d"), "15m": ("15m", "5d"), "1h": ("1h", "1mo")}
+@st.cache_data(ttl=86400, show_spinner=False)
+def translate_text(text: str) -> str:
+    if not text or GoogleTranslator is None:
+        return text
+    try:
+        out = GoogleTranslator(source="en", target="de").translate(text[:4800])
+        return out or text
+    except Exception:
+        return text
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def translate_many(texts: tuple) -> list:
+    """Übersetzt viele kurze Texte (Schlagzeilen) in EINER Anfrage."""
+    if not texts or GoogleTranslator is None:
+        return list(texts)
+    try:
+        joined = "\n".join(t.replace("\n", " ") for t in texts)
+        out = GoogleTranslator(source="en", target="de").translate(joined[:4800]) or ""
+        parts = [p.strip() for p in out.split("\n") if p.strip()]
+        if len(parts) == len(texts):
+            return parts
+    except Exception:
+        pass
+    return [translate_text(t) for t in texts]  # Rückfall: einzeln übersetzen
+
+
+def translate_paragraphs(paragraphs: list) -> list:
+    """Längere Texte in Stücken unter 4500 Zeichen übersetzen."""
+    result, chunk = [], []
+    for p in paragraphs + [None]:
+        if p is None or sum(len(x) for x in chunk) + len(p) > 4500:
+            if chunk:
+                out = translate_text("\n\n".join(chunk))
+                result.extend([x.strip() for x in out.split("\n\n") if x.strip()])
+                chunk = []
+        if p is not None:
+            chunk.append(p)
+    return result
+
+
+# ==============================================================================
+# 4. DATEN: KURSE
+# ==============================================================================
+TIMEFRAMES = {"5m": ("5m", "2d"), "15m": ("15m", "5d"), "1h": ("1h", "1mo"), "1T": ("1d", "6mo")}
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -124,26 +194,11 @@ def load_prices(interval: str, period: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def load_prev_close():
-    try:
-        d = yf.download(SYMBOL, interval="1d", period="10d", progress=False, auto_adjust=False)
-        if isinstance(d.columns, pd.MultiIndex):
-            d.columns = d.columns.get_level_values(0)
-        d = d.dropna(subset=["Close"])
-        if len(d) >= 2:
-            return float(d["Close"].iloc[-2]), float(d["Close"].iloc[-1])
-    except Exception:
-        pass
-    return None, None
-
-
 def session_vwap(df: pd.DataFrame) -> pd.Series:
     """VWAP der aktuellen Handelssitzung (Start 18:00 New Yorker Zeit)."""
     if df.empty or "Volume" not in df:
         return pd.Series(dtype=float)
     ny = df.index.tz_convert(NEW_YORK)
-    # Sitzung beginnt um 18:00 ET -> alles ab 18:00 zählt zum Folgetag
     session = (ny + pd.Timedelta(hours=6)).date
     typical = ((df["High"] + df["Low"] + df["Close"]) / 3).astype(float)
     vol = pd.to_numeric(df["Volume"], errors="coerce").fillna(0.0).astype(float)
@@ -155,7 +210,7 @@ def session_vwap(df: pd.DataFrame) -> pd.Series:
 
 
 # ==============================================================================
-# 4. DATEN: NEWS
+# 5. DATEN: NEWS
 # ==============================================================================
 BULL_WORDS = [
     "rally", "rallies", "surge", "soar", "jump", "gain", "record high", "beats", "beat estimates",
@@ -197,18 +252,38 @@ def load_news() -> list:
             items.append({
                 "title": title,
                 "link": it.findtext("link") or "#",
-                "desc": (it.findtext("description") or "").strip(),
+                "desc": re.sub(r"<[^>]+>", "", it.findtext("description") or "").strip(),
                 "dt": dt,
-                "score": news_score(title),
+                "score": news_score(title),  # Einschätzung anhand der englischen Originalwörter
             })
     items.sort(key=lambda x: x["dt"] or datetime.min.replace(tzinfo=BERLIN), reverse=True)
-    return items[:25]
+    items = items[:25]
+
+    # Schlagzeilen gesammelt ins Deutsche übersetzen
+    titles_de = translate_many(tuple(n["title"] for n in items))
+    for n, de in zip(items, titles_de):
+        n["title_de"] = de
+    return items
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_article(url: str) -> list:
+    """Holt den Artikeltext (Absätze) von der CNBC-Seite."""
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=6)
+        page = r.text
+    except Exception:
+        return []
+    start = page.find("ArticleBody")
+    body = page[start:] if start >= 0 else page
+    paras = re.findall(r"<p[^>]*>(.*?)</p>", body, flags=re.S)
+    clean = [html.unescape(re.sub(r"<[^>]+>", "", p)).strip() for p in paras]
+    return [p for p in clean if len(p) > 40][:15]
 
 
 # ==============================================================================
-# 5. DATEN: WIRTSCHAFTSKALENDER
+# 6. DATEN: WIRTSCHAFTSKALENDER
 # ==============================================================================
-# Steigt dieser Wert stärker als erwartet: gut (+1) oder schlecht (-1) für den NQ?
 INFLATION_KEYS = ["cpi", "ppi", "pce", "inflation", "average hourly earnings", "import prices"]
 GROWTH_KEYS = ["non-farm", "nonfarm", "ism", "pmi", "retail sales", "gdp", "consumer confidence", "durable"]
 JOBLESS_KEYS = ["unemployment", "jobless claims"]
@@ -278,57 +353,98 @@ def load_calendar() -> list:
 
 
 # ==============================================================================
-# 6. ANALYSE: TAGES-BIAS
+# 7. ANALYSE: BIAS FÜR TAG / WOCHE / MONAT
 # ==============================================================================
-def technical_analysis(df: pd.DataFrame, vwap: pd.Series, prev_close):
+def clamp(v, lo=-3, hi=3):
+    return max(lo, min(hi, v))
+
+
+def tech_day(df: pd.DataFrame, vwap: pd.Series, prev_close):
     reasons, score = [], 0
     if df.empty:
-        return 0, ["Keine Kursdaten verfügbar."]
+        return 0, ["Keine Intraday-Kursdaten verfügbar."]
     last = float(df["Close"].iloc[-1])
     if len(vwap.dropna()):
         v = float(vwap.dropna().iloc[-1])
-        if last > v:
-            score += 1
-            reasons.append(f"Kurs liegt über dem VWAP ({v:,.0f}).")
-        else:
-            score -= 1
-            reasons.append(f"Kurs liegt unter dem VWAP ({v:,.0f}).")
+        score += 1 if last > v else -1
+        reasons.append(f"Kurs {'über' if last > v else 'unter'} dem VWAP ({v:,.0f}).")
     if len(df) >= 50:
         ema20 = df["Close"].ewm(span=20).mean().iloc[-1]
         ema50 = df["Close"].ewm(span=50).mean().iloc[-1]
-        if ema20 > ema50:
-            score += 1
-            reasons.append("Kurzfristiger Trend aufwärts (EMA 20 über EMA 50).")
-        else:
-            score -= 1
-            reasons.append("Kurzfristiger Trend abwärts (EMA 20 unter EMA 50).")
+        score += 1 if ema20 > ema50 else -1
+        reasons.append("5-Min-Trend " + ("aufwärts (EMA 20 über EMA 50)." if ema20 > ema50
+                                        else "abwärts (EMA 20 unter EMA 50)."))
     if prev_close:
-        if last > prev_close:
-            score += 1
-            reasons.append(f"Über dem Vortagesschluss ({prev_close:,.0f}).")
-        else:
-            score -= 1
-            reasons.append(f"Unter dem Vortagesschluss ({prev_close:,.0f}).")
+        score += 1 if last > prev_close else -1
+        reasons.append(f"Kurs {'über' if last > prev_close else 'unter'} dem Vortagesschluss ({prev_close:,.0f}).")
     return score, reasons
 
 
-def calendar_analysis(events: list):
-    today = datetime.now(BERLIN).date()
-    released = [ev for ev in events if ev["dt"].date() == today and ev["signal"] != 0]
-    score = sum(ev["signal"] for ev in released)
-    if released:
-        reasons = [f"{ev['title']}: {ev['actual']} (Prognose {ev['forecast']}) "
-                   f"{'▲ gut' if ev['signal'] > 0 else '▼ schlecht'} für NQ." for ev in released]
+def tech_week(daily: pd.DataFrame):
+    if len(daily) < 25:
+        return 0, ["Zu wenig Tagesdaten für die Wochenanalyse."]
+    reasons, score = [], 0
+    last = float(daily["Close"].iloc[-1])
+    ny = daily.index.tz_convert(NEW_YORK)
+    week = ny.isocalendar().week.values == ny[-1].isocalendar()[1]
+    week_open = float(daily["Open"][week].iloc[0])
+    score += 1 if last > week_open else -1
+    reasons.append(f"Kurs {'über' if last > week_open else 'unter'} der Wochen-Eröffnung ({week_open:,.0f}).")
+    sma20 = float(daily["Close"].rolling(20).mean().iloc[-1])
+    score += 1 if last > sma20 else -1
+    reasons.append(f"Kurs {'über' if last > sma20 else 'unter'} dem 20-Tage-Durchschnitt ({sma20:,.0f}).")
+    five_ago = float(daily["Close"].iloc[-6])
+    score += 1 if last > five_ago else -1
+    reasons.append(f"Letzte 5 Handelstage: {(last / five_ago - 1) * 100:+.1f} %.")
+    return score, reasons
+
+
+def tech_month(daily: pd.DataFrame):
+    if len(daily) < 60:
+        return 0, ["Zu wenig Tagesdaten für die Monatsanalyse."]
+    reasons, score = [], 0
+    last = float(daily["Close"].iloc[-1])
+    ny = daily.index.tz_convert(NEW_YORK)
+    month = (ny.month == ny[-1].month) & (ny.year == ny[-1].year)
+    month_open = float(daily["Open"][month].iloc[0])
+    score += 1 if last > month_open else -1
+    reasons.append(f"Kurs {'über' if last > month_open else 'unter'} der Monats-Eröffnung ({month_open:,.0f}).")
+    sma50 = float(daily["Close"].rolling(50).mean().iloc[-1])
+    score += 1 if last > sma50 else -1
+    reasons.append(f"Kurs {'über' if last > sma50 else 'unter'} dem 50-Tage-Durchschnitt ({sma50:,.0f}).")
+    if len(daily) >= 200:
+        sma200 = float(daily["Close"].rolling(200).mean().iloc[-1])
+        score += 1 if sma50 > sma200 else -1
+        reasons.append("Langfristtrend " + ("aufwärts (50-Tage über 200-Tage-Linie)." if sma50 > sma200
+                                           else "abwärts (50-Tage unter 200-Tage-Linie)."))
+    return score, reasons
+
+
+def calendar_analysis(events: list, horizon: str):
+    now_ = datetime.now(BERLIN)
+    if horizon == "Tag":
+        pool = [ev for ev in events if ev["dt"].date() == now_.date()]
+        span = "heute"
     else:
-        upcoming = [ev for ev in events if ev["dt"].date() == today and ev["impact"] == "High"]
-        reasons = (["Noch keine Ergebnisse. Wichtig heute: " + ", ".join(
-            f"{ev['dt']:%H:%M} {ev['title']}" for ev in upcoming[:3]) + "."]
-            if upcoming else ["Heute keine wichtigen Termine mit Ergebnis."])
-    return max(-2, min(2, score)), reasons
+        pool = events  # der Kalender-Feed deckt die aktuelle Woche ab
+        span = "diese Woche"
+    released = [ev for ev in pool if ev["signal"] != 0]
+    score = clamp(sum(ev["signal"] for ev in released), -2, 2)
+    if released:
+        reasons = [f"{ev['title']}: {ev['actual']} (Prognose {ev['forecast']}) – "
+                   f"{'▲ gut' if ev['signal'] > 0 else '▼ schlecht'} für NQ." for ev in released[-4:]]
+    else:
+        upcoming = [ev for ev in pool if ev["dt"] >= now_ and ev["impact"] == "High"]
+        reasons = ([f"Noch keine Ergebnisse {span}. Wichtig: " + ", ".join(
+            f"{ev['dt']:%a %H:%M} {ev['title']}" for ev in upcoming[:3]) + "."]
+            if upcoming else [f"Keine wichtigen Termine mit Ergebnis {span}."])
+    return score, reasons
 
 
-def news_analysis(news: list):
-    recent = news[:12]
+def news_analysis(news: list, horizon: str):
+    if horizon == "Monat":
+        return 0, ["Tagesnachrichten zählen für den Monatsausblick nicht mit."]
+    recent = news[:12] if horizon == "Tag" else news[:25]
     score = sum(n["score"] for n in recent)
     bull = sum(1 for n in recent if n["score"] > 0)
     bear = sum(1 for n in recent if n["score"] < 0)
@@ -338,19 +454,49 @@ def news_analysis(news: list):
 
 
 # ==============================================================================
-# 7. SIDEBAR
+# 8. ARTIKEL-POP-UP
+# ==============================================================================
+@st.dialog("Meldung", width="large")
+def show_article(item: dict):
+    a, l, c = bias_style(item["score"])
+    when = f"{item['dt']:%d.%m. %H:%M}" if item.get("dt") else ""
+    st.markdown(
+        f'<div style="font-size:11px;color:#9aa4b2;display:flex;justify-content:space-between">'
+        f'<span>CNBC · {when}</span><span style="color:{c};font-weight:700">{a} {l.upper()} für NQ</span></div>'
+        f'<div style="font-size:18px;font-weight:700;line-height:1.3;margin:6px 0 2px">{e(item["title_de"])}</div>'
+        f'<div style="font-size:11px;color:#8a94a3">Original: {e(item["title"])}</div>',
+        unsafe_allow_html=True,
+    )
+    with st.spinner("Artikel wird geladen und übersetzt …"):
+        paragraphs = load_article(item["link"])
+        text_de = translate_paragraphs(paragraphs) if paragraphs else []
+    if text_de:
+        st.markdown("\n\n".join(text_de))
+    elif item.get("desc"):
+        st.markdown(translate_text(item["desc"]))
+    else:
+        st.info("Der Volltext ist für diese Meldung nicht abrufbar (z. B. Video oder Bezahlartikel).")
+    st.markdown(f'<span class="tt-note">Automatisch übersetzt. '
+                f'<a href="{e(item["link"])}" target="_blank">Original bei CNBC öffnen</a></span>',
+                unsafe_allow_html=True)
+
+
+# ==============================================================================
+# 9. SIDEBAR
 # ==============================================================================
 st.sidebar.header("⚙️ Einstellungen")
 keywords_input = st.sidebar.text_input(
-    "Eilmeldungs-Filter (Komma-getrennt)", "Fed, Inflation, Zinsen, rate, war, tariff, Nasdaq"
+    "Eilmeldungs-Filter (Komma-getrennt, Deutsch oder Englisch)",
+    "Fed, Inflation, Zinsen, rate, Krieg, war, Zölle, tariff, Nasdaq",
 )
 keywords = [k.strip().lower() for k in keywords_input.split(",") if k.strip()]
 if st.sidebar.button("🔄 Alles aktualisieren"):
     st.cache_data.clear()
-st.sidebar.caption("Kursdaten: Yahoo Finance (verzögert) · News: CNBC · Kalender: ForexFactory")
+st.sidebar.caption("Kursdaten: Yahoo Finance (verzögert) · News: CNBC · Kalender: ForexFactory · "
+                   "Übersetzung: Google Translate")
 
 # ==============================================================================
-# 8. KOPFZEILE
+# 10. KOPFZEILE
 # ==============================================================================
 now = datetime.now(BERLIN)
 st.markdown(
@@ -366,78 +512,40 @@ st.markdown(
 )
 
 # ==============================================================================
-# 9. OBEN: CHART + TAGES-BIAS
+# 11. DATEN LADEN
 # ==============================================================================
-tf = st.radio("Zeitrahmen", list(TIMEFRAMES), horizontal=True, label_visibility="collapsed")
-interval, period = TIMEFRAMES[tf]
-
-prices = load_prices(interval, period)
-intraday = load_prices("5m", "2d")  # Analyse immer auf 5-Minuten-Basis
-prev_close, _ = load_prev_close()
+intraday = load_prices("5m", "2d")
+daily = load_prices("1d", "1y")
+prev_close = float(daily["Close"].iloc[-2]) if len(daily) >= 2 else None
 vwap_intraday = session_vwap(intraday)
 news = load_news()
 calendar = load_calendar()
 
-t_score, t_reasons = technical_analysis(intraday, vwap_intraday, prev_close)
-c_score, c_reasons = calendar_analysis(calendar)
-n_score, n_reasons = news_analysis(news)
-total = t_score + c_score + n_score
-bias_val = 1 if total >= 2 else -1 if total <= -2 else 0
-arrow, label, color = bias_style(bias_val)
-strength = 1 if abs(total) <= 2 else 2 if abs(total) <= 4 else 3
-strength_txt = {1: "schwach", 2: "mittel", 3: "stark"}[strength]
-
 col_chart, col_analysis = st.columns([2.2, 1], gap="small")
 
-with col_chart:
-    if prices.empty:
-        st.warning("Kursdaten gerade nicht erreichbar. Bitte gleich noch einmal laden.")
-    else:
-        last = float(prices["Close"].iloc[-1])
-        ref = prev_close or float(prices["Close"].iloc[0])
-        chg = last - ref
-        chg_pct = chg / ref * 100 if ref else 0
-        chg_col = BULL if chg >= 0 else BEAR
-        st.markdown(
-            f'<div><span class="tt-price">{last:,.2f}</span>'
-            f'<span class="tt-chg" style="color:{chg_col}">{chg:+,.2f} · {chg_pct:+.2f} %</span></div>',
-            unsafe_allow_html=True,
-        )
-
-        show = prices.tail(160)
-        show_vwap = session_vwap(prices).reindex(show.index)
-        x = show.index.tz_convert(BERLIN)
-
-        fig = go.Figure()
-        fig.add_trace(go.Candlestick(
-            x=x, open=show["Open"], high=show["High"], low=show["Low"], close=show["Close"],
-            increasing_line_color=BULL, decreasing_line_color=BEAR,
-            increasing_fillcolor=BULL, decreasing_fillcolor=BEAR, name="NQ",
-        ))
-        if tf != "1h":
-            fig.add_trace(go.Scatter(x=x, y=show_vwap, mode="lines", name="VWAP",
-                                     line=dict(color=AMBER, width=1.3, dash="dot")))
-        if prev_close:
-            fig.add_hline(y=prev_close, line=dict(color="#5b6578", width=1, dash="dash"),
-                          annotation_text="Vortagesschluss", annotation_font_size=10,
-                          annotation_font_color="#9aa4b2", annotation_position="bottom right")
-        fig.add_annotation(
-            xref="paper", yref="paper", x=0.01, y=0.98, xanchor="left", yanchor="top",
-            text=f"<span style='font-size:10px'>TAGES-BIAS</span><br><b>{arrow} {label}</b>",
-            showarrow=False, align="left", font=dict(color=color, size=15),
-            bgcolor="rgba(15,19,27,0.9)", bordercolor=color, borderwidth=1, borderpad=6,
-        )
-        fig.update_layout(
-            height=330, margin=dict(l=0, r=0, t=4, b=0), showlegend=False,
-            paper_bgcolor="#0f131b", plot_bgcolor="#0f131b",
-            font=dict(color="#9aa4b2", size=10), xaxis_rangeslider_visible=False,
-            xaxis=dict(gridcolor="#1c2230", rangebreaks=[dict(bounds=["sat", "mon"])]),
-            yaxis=dict(gridcolor="#1c2230", side="right"),
-            dragmode=False,
-        )
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-
+# ==============================================================================
+# 12. ANALYSE (rechts bzw. auf dem Handy unter dem Chart)
+# ==============================================================================
 with col_analysis:
+    horizon = st.radio("Analyse für", ["Tag", "Woche", "Monat"], horizontal=True,
+                       label_visibility="collapsed", key="horizon")
+
+    if horizon == "Tag":
+        t_score, t_reasons = tech_day(intraday, vwap_intraday, prev_close)
+    elif horizon == "Woche":
+        t_score, t_reasons = tech_week(daily)
+    else:
+        t_score, t_reasons = tech_month(daily)
+    c_score, c_reasons = calendar_analysis(calendar, horizon)
+    n_score, n_reasons = news_analysis(news, horizon)
+
+    total = t_score + c_score + n_score
+    bias_val = 1 if total >= 2 else -1 if total <= -2 else 0
+    arrow, label, color = bias_style(bias_val)
+    strength = 1 if abs(total) <= 2 else 2 if abs(total) <= 4 else 3
+    strength_txt = {1: "schwach", 2: "mittel", 3: "stark"}[strength]
+    horizon_word = {"Tag": "TAGES", "Woche": "WOCHEN", "Monat": "MONATS"}[horizon]
+
     bars = "".join(
         f'<span class="tt-bar" style="background:{color if i < strength else "#2a3344"}"></span>'
         for i in range(3)
@@ -450,7 +558,7 @@ with col_analysis:
     st.markdown(
         f"""
 <div class="tt-card">
-  <div class="tt-h2" style="margin-top:0">Tagesanalyse <span>{now:%H:%M} Uhr</span></div>
+  <div class="tt-h2" style="margin-top:0">{horizon_word.capitalize()}-Bias <span>{now:%H:%M} Uhr</span></div>
   <div style="font-size:20px;font-weight:700;color:{color}">{arrow} {label}</div>
   <div class="tt-bars" style="margin-top:6px">Signalstärke <span>{bars}<span style="color:#e6e9ef;margin-left:6px">{strength_txt}</span></span></div>
   <div class="tt-pills">{pill("Technik", t_score)}{pill("Kalender", c_score)}{pill("News/Makro", n_score)}</div>
@@ -466,7 +574,63 @@ with col_analysis:
                     'keine Anlageberatung.</span>', unsafe_allow_html=True)
 
 # ==============================================================================
-# 10. UNTEN: KALENDER LINKS, NEWS RECHTS
+# 13. CHART
+# ==============================================================================
+with col_chart:
+    tf = st.radio("Zeitrahmen", list(TIMEFRAMES), horizontal=True, label_visibility="collapsed", key="tf")
+    interval, period = TIMEFRAMES[tf]
+    prices = load_prices(interval, period)
+
+    if prices.empty:
+        st.warning("Kursdaten gerade nicht erreichbar. Bitte gleich noch einmal laden.")
+    else:
+        last = float(prices["Close"].iloc[-1])
+        ref = prev_close or float(prices["Close"].iloc[0])
+        chg = last - ref
+        chg_pct = chg / ref * 100 if ref else 0
+        chg_col = BULL if chg >= 0 else BEAR
+        st.markdown(
+            f'<div><span class="tt-price">{last:,.2f}</span>'
+            f'<span class="tt-chg" style="color:{chg_col}">{chg:+,.2f} · {chg_pct:+.2f} %</span></div>',
+            unsafe_allow_html=True,
+        )
+
+        show = prices.tail(160)
+        x = show.index.tz_convert(BERLIN)
+
+        fig = go.Figure()
+        fig.add_trace(go.Candlestick(
+            x=x, open=show["Open"], high=show["High"], low=show["Low"], close=show["Close"],
+            increasing_line_color=BULL, decreasing_line_color=BEAR,
+            increasing_fillcolor=BULL, decreasing_fillcolor=BEAR, name="NQ",
+        ))
+        if tf in ("5m", "15m"):
+            show_vwap = session_vwap(prices).reindex(show.index)
+            fig.add_trace(go.Scatter(x=x, y=show_vwap, mode="lines", name="VWAP",
+                                     line=dict(color=AMBER, width=1.3, dash="dot")))
+        if prev_close and tf != "1T":
+            fig.add_hline(y=prev_close, line=dict(color="#5b6578", width=1, dash="dash"),
+                          annotation_text="Vortagesschluss", annotation_font_size=10,
+                          annotation_font_color="#9aa4b2", annotation_position="bottom right")
+        fig.add_annotation(
+            xref="paper", yref="paper", x=0.01, y=0.98, xanchor="left", yanchor="top",
+            text=f"<span style='font-size:10px'>{horizon_word}-BIAS</span><br><b>{arrow} {label}</b>",
+            showarrow=False, align="left", font=dict(color=color, size=15),
+            bgcolor="rgba(15,19,27,0.9)", bordercolor=color, borderwidth=1, borderpad=6,
+        )
+        breaks = [dict(bounds=["sat", "mon"])]  # Wochenenden ausblenden
+        fig.update_layout(
+            height=330, margin=dict(l=0, r=0, t=4, b=0), showlegend=False,
+            paper_bgcolor="#0f131b", plot_bgcolor="#0f131b",
+            font=dict(color="#9aa4b2", size=10), xaxis_rangeslider_visible=False,
+            xaxis=dict(gridcolor="#1c2230", rangebreaks=breaks),
+            yaxis=dict(gridcolor="#1c2230", side="right"),
+            dragmode=False,
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+# ==============================================================================
+# 14. UNTEN: KALENDER LINKS, NEWS RECHTS
 # ==============================================================================
 col_cal, col_news = st.columns(2, gap="small")
 
@@ -507,63 +671,64 @@ with col_cal:
                     '▼ schlecht für NQ</div>', unsafe_allow_html=True)
 
 with col_news:
-    st.markdown('<div class="tt-h2">News <span>mit Einschätzung für NQ</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="tt-h2">News <span>auf Deutsch · Einschätzung für NQ</span></div>',
+                unsafe_allow_html=True)
     if not news:
         st.markdown('<div class="tt-card tt-muted" style="font-size:12px">News gerade nicht erreichbar.</div>',
                     unsafe_allow_html=True)
     else:
         def has_kw(n):
-            return any(k in n["title"].lower() for k in keywords)
+            text = (n["title"] + " " + n.get("title_de", "")).lower()
+            return any(k in text for k in keywords)
+
+        def t(n):
+            return f"{n['dt']:%H:%M}" if n["dt"] else "--:--"
+
+        def tag(s):
+            a, l, c = bias_style(s)
+            return f'<span style="color:{c}">{a} {l.upper()}</span>'
 
         # Top-Meldung: neueste mit Stichwort, sonst die neueste überhaupt
         top = next((n for n in news if has_kw(n)), news[0])
         rest = [n for n in news if n is not top]
 
-        def tag(s, upper=False):
-            a, l, c = bias_style(s)
-            return f'<span style="color:{c};font-weight:700">{a} {l.upper() if upper else l}</span>'
-
-        def t(n):
-            return f"{n['dt']:%H:%M}" if n["dt"] else "--:--"
-
-        desc = e(top["desc"][:160]) if top["desc"] else ""
         st.markdown(
-            f'<a class="tt-top" href="{e(top["link"])}" target="_blank">'
-            f'<span class="tt-meta"><span style="color:{AMBER}">TOP-MELDUNG · {t(top)}</span>{tag(top["score"], True)}</span>'
-            f'<span class="tt-hl">{e(top["title"])}</span>'
-            + (f'<span style="font-size:11px;color:#c3c9d3">{desc}</span>' if desc else "")
-            + "</a>",
+            f'<div class="tt-top"><span class="tt-meta"><span style="color:{AMBER}">TOP-MELDUNG · {t(top)}</span>'
+            f'{tag(top["score"])}</span><span class="tt-hl">{e(top["title_de"])}</span></div>',
             unsafe_allow_html=True,
         )
+        if st.button("Meldung lesen", key="open_top"):
+            show_article(top)
 
-        lines = []
-        for n in rest[:2]:
-            a, _, c = bias_style(n["score"])
-            kw = " tt-kw" if has_kw(n) else ""
-            lines.append(
-                f'<a class="tt-line{kw}" href="{e(n["link"])}" target="_blank">'
-                f'<span style="color:{c};font-weight:700;width:14px">{a}</span>'
-                f'<span class="tt-hl">{e(n["title"])}</span>'
-                f'<span class="tt-muted" style="font-size:10px">{t(n)}</span></a>'
-            )
-        st.markdown("".join(lines), unsafe_allow_html=True)
+        # Zwei weitere Meldungen als kompakte Zeilen
+        for i, n in enumerate(rest[:2]):
+            key = f"nline_kw_{i}" if has_kw(n) else f"nline_{i}"
+            if st.button(f"{md_arrow(n['score'])}  {n['title_de']}  ·  {t(n)}", key=key):
+                show_article(n)
 
+        # Galerie: eine Karte, mit ‹ und › weiterblättern
         gallery = rest[2:]
         if gallery:
-            cards = []
-            for n in gallery:
-                strength_dots = "●" * abs(n["score"]) + "○" * (2 - abs(n["score"]))
-                border = f' style="border-color:{AMBER}"' if has_kw(n) else ""
-                cards.append(
-                    f'<div class="tt-gcard"{border}>'
-                    f'<span class="tt-meta"><span class="tt-muted">CNBC · {t(n)}</span>{tag(n["score"], True)}</span>'
-                    f'<span class="tt-hl">{e(n["title"])}</span>'
-                    f'<span style="display:flex;justify-content:space-between;align-items:center">'
-                    f'<span class="tt-muted" style="font-size:10px">Stärke {strength_dots}</span>'
-                    f'<a href="{e(n["link"])}" target="_blank">Artikel lesen ›</a></span></div>'
-                )
+            idx = st.session_state.get("gal_idx", 0) % len(gallery)
+            g = gallery[idx]
+            dots = "●" * abs(g["score"]) + "○" * (2 - abs(g["score"]))
+            border = f' style="border-color:{AMBER}"' if has_kw(g) else ""
             st.markdown(
-                f'<div class="tt-gal-hint"><span>Weitere Meldungen</span><span>← wischen → · {len(gallery)}</span></div>'
-                f'<div class="tt-gal">{"".join(cards)}</div>',
+                f'<div class="tt-h2" style="margin-top:10px">Weitere Meldungen <span>{idx + 1} / {len(gallery)}</span></div>'
+                f'<div class="tt-gcard"{border}><span class="tt-meta"><span class="tt-muted">CNBC · {t(g)}</span>'
+                f'{tag(g["score"])}</span><span class="tt-hl">{e(g["title_de"])}</span>'
+                f'<span class="tt-muted" style="font-size:10px">Stärke {dots}</span></div>',
                 unsafe_allow_html=True,
             )
+            if st.button("Meldung lesen", key="gal_open"):
+                show_article(g)
+            with st.container(key="galnav"):
+                prev_col, next_col = st.columns(2)
+                with prev_col:
+                    if st.button("‹ Zurück", key="gal_prev"):
+                        st.session_state["gal_idx"] = (idx - 1) % len(gallery)
+                        st.rerun()
+                with next_col:
+                    if st.button("Weiter ›", key="gal_next"):
+                        st.session_state["gal_idx"] = (idx + 1) % len(gallery)
+                        st.rerun()
