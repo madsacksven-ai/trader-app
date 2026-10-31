@@ -1,6 +1,0 @@
-streamlit>=1.40
-pandas
-requests
-plotly
-yfinance
-deep-translator
