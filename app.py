@@ -1,6 +1,7 @@
 import csv
 import html
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from email.utils import parsedate_to_datetime
@@ -71,14 +72,11 @@ h1, h2, h3 {{ margin: 0 !important; }}
 .tt-cal {{ background:#131822; border:1px solid #232a36; border-radius:12px; overflow:hidden; }}
 .tt-row {{ display:grid; grid-template-columns:14px 44px minmax(0,1fr) 104px; gap:7px; padding:7px 10px; font-size:12px; align-items:center; border-bottom:1px solid #1c2230; color:#e6e9ef; }}
 .tt-row:last-child {{ border-bottom:none; }}
-details.tt-ev {{ border-bottom:1px solid #1c2230; }}
-details.tt-ev:last-child {{ border-bottom:none; }}
-details.tt-ev > summary {{ list-style:none; cursor:pointer; }}
-details.tt-ev > summary::-webkit-details-marker {{ display:none; }}
-details.tt-ev .tt-row {{ border-bottom:none; }}
-details.tt-ev[open] > summary .tt-row {{ background:#171d29; }}
-.tt-why {{ font-size:11px; line-height:1.5; color:#c3c9d3; padding:6px 10px 9px 31px; background:#171d29; }}
-.tt-why b {{ color:#e6e9ef; font-weight:600; }}
+.tt-scn-card {{ margin-bottom:6px; }}
+.tt-scn {{ display:flex; justify-content:space-between; gap:8px; font-size:12px; padding:5px 8px;
+  background:#0f131b; border-radius:8px; margin-top:4px; color:#c3c9d3; }}
+.tt-result {{ margin-top:8px; padding:8px 10px; border:1px solid; border-radius:8px; font-size:14px; font-weight:700; }}
+.tt-res-vals {{ display:block; font-size:11px; font-weight:400; color:#c3c9d3; margin-top:3px; }}
 .tt-row.tt-hd {{ font-size:9px; color:#8a94a3; padding:6px 10px; }}
 .tt-mono {{ font-family:'JetBrains Mono', ui-monospace, monospace; }}
 .tt-muted {{ color:#9aa4b2; }}
@@ -124,6 +122,11 @@ div[data-testid="stExpander"] summary p {{ font-size:12px; font-weight:600; }}
 def e(text) -> str:
     """Text sicher für HTML machen."""
     return html.escape(str(text))
+
+
+def de_day(dt) -> str:
+    """Deutscher Wochentag, kurz."""
+    return ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"][dt.weekday()]
 
 
 def bias_style(score: int):
@@ -363,48 +366,42 @@ def load_article(url: str) -> list:
 
 
 # ==============================================================================
-# 6. DATEN: WIRTSCHAFTSKALENDER
+# 6. DATEN: WIRTSCHAFTSKALENDER (live mit Ist-Werten)
 # ==============================================================================
 # Eigene Bewertung aus Sicht des NQ-Future-Traders – NICHT die Dollar-Farben der Quelle.
 # Jede Regel sagt: Kommt der Wert HÖHER als die Prognose, ist das für den NQ ...
 #   -1 = bärisch (z. B. höhere Inflation -> höhere Zinsen -> Tech fällt)
 #   +1 = bullisch (z. B. stärkere Konjunktur -> mehr Gewinne)
+# Drittes Feld True = doppeldeutig ("gute Nachricht kann schlecht für den Markt sein") -> ⇅
 # Reihenfolge zählt: die erste passende Regel gewinnt.
-# Viertes Feld: Gegenargument, wenn der Termin doppeldeutig ist
-# ("gute Nachricht ist schlechte Nachricht"), sonst None.
 NQ_RULES = [
-    (["rate decision", "funds rate", "refinancing rate", "deposit facility", "interest rate"], -1,
-     "höhere Zinsen belasten Tech-Werte", None),
-    (["bond auction", "note auction", "bill auction"], -1,
-     "höhere Anleiherenditen belasten Tech-Werte", None),
+    (["rate decision", "funds rate", "refinancing rate", "deposit facility", "interest rate"], -1, False),
+    (["bond auction", "note auction", "bill auction"], -1, False),
     (["cpi", "ppi", "pce", "inflation", "price index", "average hourly earnings",
-      "employment cost", "import prices", "wage"], -1,
-     "höhere Inflation = Zinsen bleiben hoch", None),
-    (["unemployment rate", "unemployment claims", "jobless claims", "continuing claims"], -1,
-     "mehr Arbeitslose = schwächere Wirtschaft",
-     "Mehr Arbeitslose machen aber Zinssenkungen wahrscheinlicher – das kann den NQ auch steigen lassen."),
-    (["non-farm", "nonfarm", "adp", "jolts", "employment change"], 1,
-     "mehr Jobs = stabile Wirtschaft",
-     "Viele Jobs machen aber Zinssenkungen unwahrscheinlicher – das kann den NQ auch fallen lassen."),
+      "employment cost", "import prices", "wage"], -1, False),
+    (["unemployment rate", "unemployment claims", "jobless claims", "continuing claims"], -1, True),
+    (["non-farm", "nonfarm", "non farm", "payrolls", "adp", "jolts", "employment change"], 1, True),
     (["ism", "pmi", "retail sales", "gdp", "consumer confidence", "consumer sentiment",
       "durable goods", "industrial production", "factory orders", "housing starts",
       "building permits", "home sales", "productivity", "business confidence", "zew", "ifo",
-      "empire state", "philly fed", "manufacturing index", "economic optimism"], 1,
-     "stärkere Konjunktur stützt Gewinne",
-     "Eine sehr starke Wirtschaft kann aber die Zinsen hoch halten – das kann den NQ auch belasten."),
+      "empire state", "philly fed", "philadelphia fed", "manufacturing index", "economic optimism",
+      "personal spending"], 1, True),
 ]
 
-REACTION_MINUTES = 30     # so lange nach dem Termin wird die NQ-Reaktion gemessen
-REACTION_MIN_PCT = 0.15   # kleinere Bewegungen gelten als "keine klare Reaktion"
+# Live-Quelle: TradingView-Wirtschaftskalender (Vorher / Prognose / Ist, Ist-Wert direkt zur Veröffentlichung)
+TV_CALENDAR_URL = "https://economic-calendar.tradingview.com/events"
+TV_HEADERS = {**HEADERS, "Origin": "https://www.tradingview.com", "Referer": "https://www.tradingview.com/"}
+TV_COUNTRIES = {"US": "USD", "EU": "EUR", "DE": "EUR"}
+TV_IMPORTANCE = {1: "High", 0: "Medium"}  # -1 = niedrig, wird ausgeblendet
 
 
 def calendar_direction(title: str):
-    """Gibt (Richtung, Begründung, Gegenargument oder None) aus Sicht des NQ zurück."""
+    """Gibt (Richtung, doppeldeutig?) aus Sicht des NQ zurück."""
     t = title.lower()
-    for keys, direction, why, conflict in NQ_RULES:
+    for keys, direction, ambiguous in NQ_RULES:
         if any(k in t for k in keys):
-            return direction, why, conflict
-    return 0, "kein klarer Einfluss auf den NQ", None
+            return direction, ambiguous
+    return 0, False
 
 
 def direction_hint(direction: int) -> str:
@@ -416,100 +413,108 @@ def direction_hint(direction: int) -> str:
     return ""
 
 
-def to_number(val):
-    if val in (None, "", "-"):
+def plain_number(value):
+    """Zahl ohne Einheit ('0.3%' -> 0.3, '180K' -> 180, '1,234K' -> 1234)."""
+    if value in (None, "", "–", "-"):
         return None
+    s = str(value).strip().replace(" ", "")
+    s = re.sub(r"[%KMBT]+$", "", s)
+    if "," in s and "." in s and s.rfind(",") > s.rfind("."):
+        s = s.replace(".", "")
+    if "," in s and "." not in s and not re.fullmatch(r"-?\d{1,3}(,\d{3})+", s):
+        s = s.replace(",", ".")
+    s = s.replace(",", "")
     try:
-        s = str(val).replace("%", "").replace(",", "")
-        mult = 1
-        if s.endswith("K"):
-            s, mult = s[:-1], 1e3
-        elif s.endswith("M"):
-            s, mult = s[:-1], 1e6
-        elif s.endswith("B"):
-            s, mult = s[:-1], 1e9
-        return float(s) * mult
-    except Exception:
+        return float(s)
+    except ValueError:
         return None
 
 
-@st.cache_data(ttl=600, show_spinner=False)
-def load_calendar() -> list:
+def fmt_value(val, scale: str = "", unit: str = "") -> str:
+    """Zahl aus der Quelle lesbar machen, z. B. 0.3 + '%' -> '0.3%', 250 + 'K' -> '250K'."""
+    if val is None:
+        return "–"
     try:
-        r = requests.get(CALENDAR_URL, headers=HEADERS, timeout=5)
-        raw = r.json()
-    except Exception:
-        return []
+        num = float(val)
+    except (TypeError, ValueError):
+        return "–"
+    txt = f"{num:,.2f}".rstrip("0").rstrip(".") if abs(num) >= 1000 else f"{num:g}"
+    return f"{txt}{scale or ''}{unit if unit == '%' else ''}"
+
+
+def make_event(dt, country, title, impact, actual, forecast, previous) -> dict:
+    """Ein Termin – mit eigener NQ-Bewertung, sobald der Ist-Wert da ist."""
+    direction, ambiguous = calendar_direction(title)
+    a, f = plain_number(actual), plain_number(forecast)
+    sig = 0
+    if a is not None and f is not None and a != f:
+        sig = direction * (1 if a > f else -1)
+    return {
+        "dt": dt, "country": country, "title": f"{country} {title}", "impact": impact,
+        "actual": actual or "–", "forecast": forecast or "–", "previous": previous or "–",
+        "signal": sig, "direction": direction, "ambiguous": ambiguous,
+    }
+
+
+def load_calendar_tradingview() -> list:
+    now_utc = datetime.now(ZoneInfo("UTC"))
+    start = (now_utc - pd.Timedelta(days=2)).strftime("%Y-%m-%dT00:00:00.000Z")
+    end = (now_utc + pd.Timedelta(days=8)).strftime("%Y-%m-%dT00:00:00.000Z")
+    r = requests.get(TV_CALENDAR_URL, headers=TV_HEADERS, timeout=6,
+                     params={"from": start, "to": end, "countries": ",".join(TV_COUNTRIES)})
+    r.raise_for_status()
+    data = r.json()
+    if data.get("status") != "ok":
+        raise ValueError(data.get("errmsg") or "Kalender-Fehler")
     events = []
-    for ev in raw:
-        if ev.get("country") not in ("USD", "EUR"):
+    for ev in data.get("result", []):
+        impact = TV_IMPORTANCE.get(ev.get("importance"))
+        country = TV_COUNTRIES.get(ev.get("country"))
+        if not impact or not country:
             continue
-        if ev.get("impact") not in ("High", "Medium"):
+        try:
+            dt = datetime.fromisoformat(str(ev["date"]).replace("Z", "+00:00")).astimezone(BERLIN)
+        except Exception:
+            continue
+        scale, unit = ev.get("scale") or "", ev.get("unit") or ""
+        events.append(make_event(
+            dt, country, ev.get("title", ""), impact,
+            fmt_value(ev.get("actual"), scale, unit) if ev.get("actual") is not None else "",
+            fmt_value(ev.get("forecast"), scale, unit) if ev.get("forecast") is not None else "",
+            fmt_value(ev.get("previous"), scale, unit) if ev.get("previous") is not None else "",
+        ))
+    return events
+
+
+def load_calendar_forexfactory() -> list:
+    """Rückfall-Quelle (ohne Ist-Werte)."""
+    r = requests.get(CALENDAR_URL, headers=HEADERS, timeout=5)
+    events = []
+    for ev in r.json():
+        if ev.get("country") not in ("USD", "EUR") or ev.get("impact") not in ("High", "Medium"):
             continue
         try:
             dt = datetime.fromisoformat(ev["date"]).astimezone(BERLIN)
         except Exception:
             continue
-        actual, forecast = ev.get("actual", ""), ev.get("forecast", "")
-        a, f = to_number(actual), to_number(forecast)
-        direction, why, conflict = calendar_direction(ev.get("title", ""))
-        sig = 0
-        if a is not None and f is not None and a != f:
-            sig = direction * (1 if a > f else -1)
-        events.append({
-            "dt": dt,
-            "country": ev.get("country"),
-            "title": f"{ev['country']} {ev.get('title', '')}",
-            "impact": ev.get("impact"),
-            "forecast": forecast or "–",
-            "actual": actual or "–",
-            "previous": ev.get("previous") or "–",
-            "signal": sig,          # endgültige Bewertung (kann durch Marktreaktion ersetzt werden)
-            "expected": sig,        # Bewertung laut Regel
-            "direction": direction,
-            "why": why,
-            "conflict_text": conflict,
-            "reaction": None,       # NQ-Bewegung in % nach dem Termin
-            "contradiction": False, # Markt reagiert anders als die Regel
-        })
-    events.sort(key=lambda x: x["dt"])
+        events.append(make_event(dt, ev["country"], ev.get("title", ""), ev.get("impact"),
+                                 ev.get("actual", ""), ev.get("forecast", ""), ev.get("previous", "")))
     return events
 
 
-def market_reaction(dt: datetime, *frames: pd.DataFrame):
-    """NQ-Bewegung in % von kurz vor dem Termin bis REACTION_MINUTES danach (None = keine Daten)."""
-    start = pd.Timestamp(dt).tz_convert("UTC")
-    end = start + pd.Timedelta(minutes=REACTION_MINUTES)
-    for df in frames:  # feinste Daten zuerst
-        if df is None or df.empty:
+@st.cache_data(ttl=30, show_spinner=False)
+def load_calendar():
+    """Gibt (Termine, Quelle) zurück. Alle 30 Sekunden frisch."""
+    for name, loader in (("TradingView · live", load_calendar_tradingview),
+                         ("ForexFactory · ohne Ist-Werte", load_calendar_forexfactory)):
+        try:
+            events = loader()
+            if events:
+                events.sort(key=lambda x: x["dt"])
+                return events, name
+        except Exception:
             continue
-        before = df[df.index < start]
-        after = df[(df.index >= start) & (df.index <= end)]
-        if before.empty or after.empty or before.index[-1] < start - pd.Timedelta(minutes=30):
-            continue
-        ref = float(before["Close"].iloc[-1])
-        if ref:
-            return (float(after["Close"].iloc[-1]) / ref - 1) * 100
-    return None
-
-
-def add_reactions(events: list, *frames: pd.DataFrame) -> list:
-    """Vergleicht die Regel mit der echten Marktreaktion – bei Widerspruch zählt der Markt."""
-    now_ = datetime.now(BERLIN)
-    for ev in events:
-        if ev["actual"] in ("–", "") or ev["dt"] > now_:
-            continue
-        move = market_reaction(ev["dt"], *frames)
-        if move is None:
-            continue
-        ev["reaction"] = move
-        react = 0 if abs(move) < REACTION_MIN_PCT else (1 if move > 0 else -1)
-        if react != 0 and ev["expected"] != 0 and react != ev["expected"]:
-            ev["contradiction"] = True
-            ev["signal"] = react  # der Markt hat entschieden
-        elif react != 0 and ev["expected"] == 0 and ev["direction"] != 0:
-            ev["signal"] = react  # Ergebnis = Prognose, aber Markt hat klar reagiert
-    return events
+    return [], ""
 
 
 # ==============================================================================
@@ -598,16 +603,12 @@ def calendar_analysis(events: list, horizon: str):
         reasons = []
         for ev in released[-4:]:
             verdict = "▲ bullisch" if ev["signal"] > 0 else "▼ bärisch"
-            if ev["contradiction"]:
-                reasons.append(f"{ev['title']}: {ev['actual']} (Prognose {ev['forecast']}) – ⇅ Regel sagte "
-                               f"anders, aber der NQ reagierte mit {ev['reaction']:+.2f} % → {verdict}.")
-            else:
-                reasons.append(f"{ev['title']}: {ev['actual']} (Prognose {ev['forecast']}) – "
-                               f"{verdict}, {ev['why']}.")
+            warn = " ⇅ Achtung, Markt kann es anders sehen." if ev["ambiguous"] else ""
+            reasons.append(f"{ev['title']}: {ev['actual']} (Prognose {ev['forecast']}) – {verdict}.{warn}")
     else:
         upcoming = [ev for ev in pool if ev["dt"] >= now_ and ev["impact"] == "High"]
         reasons = ([f"Noch keine Ergebnisse {span}. Wichtig: " + ", ".join(
-            f"{ev['dt']:%a %H:%M} {ev['title']}" for ev in upcoming[:3]) + "."]
+            f"{de_day(ev['dt'])} {ev['dt']:%H:%M} {ev['title']}" for ev in upcoming[:3]) + "."]
             if upcoming else [f"Keine wichtigen Termine mit Ergebnis {span}."])
     return score, reasons
 
@@ -629,6 +630,7 @@ def news_analysis(news: list, horizon: str):
 # ==============================================================================
 @st.dialog("Meldung", width="large")
 def show_article(item: dict):
+    st.session_state["_article_opened"] = time.time()  # Auto-Aktualisierung pausieren, solange du liest
     a, l, c = bias_style(item["score"])
     when = f"{item['dt']:%d.%m. %H:%M}" if item.get("dt") else ""
     st.markdown(
@@ -690,7 +692,7 @@ daily = load_prices("1d", "1y")
 prev_close = float(daily["Close"].iloc[-2]) if len(daily) >= 2 else None
 vwap_intraday = session_vwap(intraday)
 news = load_news()
-calendar = add_reactions(load_calendar(), intraday, load_prices("15m", "5d"))
+calendar, calendar_source = load_calendar()
 
 col_chart, col_analysis = st.columns([2.2, 1], gap="small")
 
@@ -817,6 +819,75 @@ with col_chart:
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 # ==============================================================================
+# 13b. SZENARIO-KARTE: NÄCHSTER WICHTIGER TERMIN (Countdown, Szenarien, Live-Ergebnis)
+# ==============================================================================
+def countdown(dt: datetime) -> str:
+    minutes = int((dt - datetime.now(BERLIN)).total_seconds() // 60)
+    if -1 <= minutes <= 0:
+        return "JETZT"
+    if minutes < 0:
+        return f"vor {-minutes} Min"
+    if minutes < 60:
+        return f"in {minutes} Min"
+    if minutes < 24 * 60:
+        return f"in {minutes // 60} Std {minutes % 60} Min"
+    return f"{de_day(dt)} {dt:%d.%m. %H:%M}"
+
+
+def scenario_slot(events: list) -> list:
+    """Alle Termine zum nächsten ●●●-Zeitpunkt – bleibt nach der Veröffentlichung 60 Min stehen."""
+    now_ = datetime.now(BERLIN)
+    window = [ev for ev in events if ev["impact"] == "High" and ev["dt"] >= now_ - pd.Timedelta(minutes=60)]
+    if not window:
+        return []
+    first = min(ev["dt"] for ev in window)
+    return [ev for ev in events if ev["dt"] == first][:4]
+
+
+WARN = f'<span style="color:{AMBER};font-weight:700" title="Doppeldeutig">⇅</span>'
+
+slot = scenario_slot(calendar)
+if slot:
+    when = slot[0]["dt"]
+    is_due = when <= datetime.now(BERLIN)
+    head_col = AMBER if is_due or (when - datetime.now(BERLIN)).total_seconds() < 3600 else "#9aa4b2"
+    st.markdown(
+        f'<div class="tt-h2" style="margin-top:12px">Nächster wichtiger Termin '
+        f'<span style="color:{head_col};font-weight:700">{countdown(when)} · {when:%H:%M} Uhr</span></div>',
+        unsafe_allow_html=True,
+    )
+    cards = []
+    for ev in slot:
+        fc, released = ev["forecast"], ev["actual"] not in ("–", "")
+        dots = "●●●" if ev["impact"] == "High" else "●●"
+        warn = f" {WARN}" if ev["ambiguous"] else ""
+        if released:
+            # Ergebnis ist da: sofortige Bewertung
+            ra, rl, rc = bias_style(ev["signal"])
+            body = (f'<div class="tt-result" style="border-color:{rc};color:{rc}">{ra} {rl.upper()}{warn}'
+                    f'<span class="tt-res-vals">Vorher {e(ev["previous"])} · Prognose {e(fc)} · '
+                    f'<b>Ist {e(ev["actual"])}</b></span></div>')
+        elif ev["direction"] != 0 and plain_number(fc) is not None:
+            up_a, up_l, up_c = bias_style(ev["direction"])
+            dn_a, dn_l, dn_c = bias_style(-ev["direction"])
+            body = (f'<div class="tt-scn"><span>Über {e(fc)}</span><b style="color:{up_c}">{up_a} {up_l}</b></div>'
+                    f'<div class="tt-scn"><span>Unter {e(fc)}</span><b style="color:{dn_c}">{dn_a} {dn_l}</b></div>')
+        else:
+            body = '<div class="tt-note">Keine klare Richtung für den NQ.</div>'
+        if ev["ambiguous"]:
+            body += (f'<div class="tt-note" style="margin-top:5px">{WARN} Achtung: Gute Nachricht kann schlecht '
+                     'für den Markt sein (Zinsen) – Reaktion beobachten.</div>')
+        cards.append(
+            f'<div class="tt-card tt-scn-card"><div style="display:flex;justify-content:space-between;'
+            f'font-size:13px;font-weight:700"><span>{e(ev["title"])}</span>'
+            f'<span style="color:{AMBER if ev["impact"] == "High" else "#9aa4b2"};font-size:10px">{dots}</span></div>'
+            + ("" if released else
+               f'<div class="tt-note" style="margin:2px 0 4px">Vorher {e(ev["previous"])} · Prognose {e(fc)}</div>')
+            + f"{body}</div>"
+        )
+    st.markdown("".join(cards), unsafe_allow_html=True)
+
+# ==============================================================================
 # 14. UNTEN: KALENDER LINKS, NEWS RECHTS
 # ==============================================================================
 col_cal, col_news = st.columns(2, gap="small")
@@ -839,59 +910,27 @@ with col_cal:
                     unsafe_allow_html=True)
     else:
         rows = ['<div class="tt-row tt-hd"><span></span><span>ZEIT</span><span>EREIGNIS</span>'
-                '<span>PROG / AKT / VORH</span></div>']
+                '<span>VORH / PROG / IST</span></div>']
         for ev in shown:
-            a, _, c = bias_style(ev["signal"])  # eigene NQ-Bewertung, sobald das Ergebnis da ist
+            a, _, c = bias_style(ev["signal"])  # eigene NQ-Bewertung, sobald der Ist-Wert da ist
             dots = "●●●" if ev["impact"] == "High" else "●●"
             dcol = AMBER if ev["impact"] == "High" else "#9aa4b2"
-            day = "" if ev["dt"].date() == today else f"{ev['dt']:%a} "
+            day = "" if ev["dt"].date() == today else f"{de_day(ev['dt'])} "
             released = ev["actual"] not in ("–", "")
             hint = direction_hint(ev["direction"]) if not released else ""
-            # ⇅ = Widerspruch (Markt reagierte anders) oder doppeldeutiger Termin vor dem Ergebnis
-            flag = ""
-            if ev["contradiction"]:
-                flag = f' <span style="color:{AMBER};font-weight:700">⇅</span>'
-            elif ev["conflict_text"] and not released:
-                flag = ' <span class="tt-muted">⇅</span>'
-
-            # Aufklapp-Text: warum so bewertet?
-            rule = direction_hint(ev["direction"])
-            why = [f"<b>Regel:</b> {e(ev['why'][:1].upper() + ev['why'][1:])}"
-                   + (f" ({e(rule)})." if rule else ".")]
-            if ev["conflict_text"]:
-                why.append(f"<b>⇅ Aber:</b> {e(ev['conflict_text'])}")
-            if released and ev["expected"] != 0:
-                ea, el, ec = bias_style(ev["expected"])
-                why.append(f"<b>Ergebnis:</b> {e(ev['actual'])} statt {e(ev['forecast'])} → laut Regel "
-                           f'<span style="color:{ec}">{ea} {el.lower()}</span>.')
-            if ev["reaction"] is not None:
-                ra, rl, rc = bias_style(0 if abs(ev["reaction"]) < REACTION_MIN_PCT else ev["reaction"])
-                why.append(f"<b>Marktreaktion NQ ({REACTION_MINUTES} Min):</b> "
-                           f'<span style="color:{rc}">{ev["reaction"]:+.2f} % {ra}</span>')
-            if ev["contradiction"]:
-                why.append(f'<b style="color:{AMBER}">Fazit:</b> Der Markt sieht es anders als die Regel – '
-                           f"für die Analyse zählt die Marktreaktion ({a} {bias_style(ev['signal'])[1].lower()}).")
-            elif released and ev["reaction"] is not None and ev["signal"] != 0:
-                why.append(f"<b>Fazit:</b> Markt bestätigt die Einschätzung ({a}).")
-            elif not released and ev["conflict_text"]:
-                why.append("<b>Tipp:</b> Nach dem Ergebnis die ersten Minuten abwarten – "
-                           "die Reaktion des Marktes zeigt, welche Seite gewinnt.")
-
             rows.append(
-                f'<details class="tt-ev"><summary>'
                 f'<div class="tt-row"><span style="color:{c};font-weight:700">{a}</span>'
                 f'<span class="tt-mono tt-muted">{day}{ev["dt"]:%H:%M}</span>'
-                f'<span><b style="font-weight:600">{e(ev["title"])}</b>{flag}'
+                f'<span><b style="font-weight:600">{e(ev["title"])}</b>{" " + WARN if ev["ambiguous"] else ""}'
                 f'<span class="tt-imp"><span style="color:{dcol}">{dots}</span>'
                 + (f' <span class="tt-muted">· {hint}</span>' if hint else "")
                 + '</span></span>'
-                f'<span class="tt-mono tt-vals">{e(ev["forecast"])} / <b>{e(ev["actual"])}</b> / '
-                f'<span class="tt-muted">{e(ev["previous"])}</span></span></div></summary>'
-                f'<div class="tt-why">{"<br>".join(why)}</div></details>'
+                f'<span class="tt-mono tt-vals"><span class="tt-muted">{e(ev["previous"])}</span> / '
+                f'{e(ev["forecast"])} / <b style="color:{c if released else "#e6e9ef"}">{e(ev["actual"])}</b></span></div>'
             )
         st.markdown(f'<div class="tt-cal">{"".join(rows)}</div>', unsafe_allow_html=True)
-        st.markdown('<div class="tt-note" style="margin-top:4px">Termin antippen = Erklärung · ●●● hoch · ●● mittel · '
-                    '▲ bullisch / ▼ bärisch für den NQ · ⇅ doppeldeutig bzw. Markt widerspricht</div>',
+        st.markdown(f'<div class="tt-note" style="margin-top:4px">▲ bullisch / ▼ bärisch für den NQ · '
+                    f'{WARN} Achtung, Markt kann es anders sehen · Quelle: {e(calendar_source)}</div>',
                     unsafe_allow_html=True)
 
 with col_news:
@@ -953,3 +992,25 @@ with col_news:
                     if st.button("Weiter ›", key="gal_next"):
                         st.session_state["gal_idx"] = (idx + 1) % len(gallery)
                         st.rerun()
+
+# ==============================================================================
+# 15. AUTOMATISCHE AKTUALISIERUNG
+# ==============================================================================
+# Kurz vor und nach einem wichtigen Termin alle 30 Sekunden, sonst jede Minute.
+# Pausiert, solange du einen Artikel liest (3 Min).
+REFRESH_SECONDS = 60
+if slot and abs((slot[0]["dt"] - datetime.now(BERLIN)).total_seconds()) < 15 * 60:
+    REFRESH_SECONDS = 30
+st.session_state["_last_full_run"] = time.time()
+
+if hasattr(st, "fragment"):
+    @st.fragment(run_every=REFRESH_SECONDS)
+    def _auto_refresh():
+        now_ts = time.time()
+        reading = now_ts - st.session_state.get("_article_opened", 0) < 180
+        if reading:
+            return
+        if now_ts - st.session_state.get("_last_full_run", now_ts) >= REFRESH_SECONDS - 2:
+            st.rerun()
+
+    _auto_refresh()
