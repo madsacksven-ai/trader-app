@@ -69,8 +69,16 @@ h1, h2, h3 {{ margin: 0 !important; }}
 .tt-bars {{ display:flex; gap:3px; align-items:center; font-size:12px; color:#9aa4b2; justify-content:space-between; }}
 .tt-bar {{ width:24px; height:6px; border-radius:3px; display:inline-block; margin-left:3px; }}
 .tt-cal {{ background:#131822; border:1px solid #232a36; border-radius:12px; overflow:hidden; }}
-.tt-row {{ display:grid; grid-template-columns:44px minmax(0,1fr) 112px 18px; gap:8px; padding:7px 10px; font-size:12px; align-items:center; border-bottom:1px solid #1c2230; color:#e6e9ef; }}
+.tt-row {{ display:grid; grid-template-columns:14px 44px minmax(0,1fr) 104px; gap:7px; padding:7px 10px; font-size:12px; align-items:center; border-bottom:1px solid #1c2230; color:#e6e9ef; }}
 .tt-row:last-child {{ border-bottom:none; }}
+details.tt-ev {{ border-bottom:1px solid #1c2230; }}
+details.tt-ev:last-child {{ border-bottom:none; }}
+details.tt-ev > summary {{ list-style:none; cursor:pointer; }}
+details.tt-ev > summary::-webkit-details-marker {{ display:none; }}
+details.tt-ev .tt-row {{ border-bottom:none; }}
+details.tt-ev[open] > summary .tt-row {{ background:#171d29; }}
+.tt-why {{ font-size:11px; line-height:1.5; color:#c3c9d3; padding:6px 10px 9px 31px; background:#171d29; }}
+.tt-why b {{ color:#e6e9ef; font-weight:600; }}
 .tt-row.tt-hd {{ font-size:9px; color:#8a94a3; padding:6px 10px; }}
 .tt-mono {{ font-family:'JetBrains Mono', ui-monospace, monospace; }}
 .tt-muted {{ color:#9aa4b2; }}
@@ -82,6 +90,12 @@ h1, h2, h3 {{ margin: 0 !important; }}
 div[data-testid="stRadio"] label p {{ font-size:12px; }}
 div[data-testid="stRadio"] > div {{ gap:4px; }}
 
+/* News-Karten: alle exakt gleich breit (volle Spaltenbreite) */
+div[class*="st-key-nline_"], div.st-key-news_top, div.st-key-gal_card,
+div[class*="st-key-nline_"] .stButton, div.st-key-news_top .stButton, div.st-key-gal_card .stButton {{
+  width:100% !important; max-width:100% !important; }}
+div[class*="st-key-nline_"] button div, div.st-key-news_top button div, div.st-key-gal_card button div {{
+  width:100%; justify-content:flex-start; text-align:left; }}
 /* News-Karten sind selbst Buttons: antippen = Artikel öffnen */
 div[class*="st-key-nline_"] button, div.st-key-news_top button, div.st-key-gal_card button {{
   width:100%; justify-content:flex-start; text-align:left; background:#131822;
@@ -134,6 +148,14 @@ def md_safe(text: str) -> str:
     for ch in ["\\", "$", "*", "_", "`", "[", "]", "#", "~"]:
         text = text.replace(ch, "\\" + ch)
     return text
+
+
+def card_button(label: str, key: str) -> bool:
+    """Button über die volle Breite (neue und ältere Streamlit-Versionen)."""
+    try:
+        return st.button(label, key=key, width="stretch")
+    except TypeError:
+        return st.button(label, key=key, use_container_width=True)
 
 
 def css_text(text: str) -> str:
@@ -343,20 +365,55 @@ def load_article(url: str) -> list:
 # ==============================================================================
 # 6. DATEN: WIRTSCHAFTSKALENDER
 # ==============================================================================
-INFLATION_KEYS = ["cpi", "ppi", "pce", "inflation", "average hourly earnings", "import prices"]
-GROWTH_KEYS = ["non-farm", "nonfarm", "ism", "pmi", "retail sales", "gdp", "consumer confidence", "durable"]
-JOBLESS_KEYS = ["unemployment", "jobless claims"]
+# Eigene Bewertung aus Sicht des NQ-Future-Traders – NICHT die Dollar-Farben der Quelle.
+# Jede Regel sagt: Kommt der Wert HÖHER als die Prognose, ist das für den NQ ...
+#   -1 = bärisch (z. B. höhere Inflation -> höhere Zinsen -> Tech fällt)
+#   +1 = bullisch (z. B. stärkere Konjunktur -> mehr Gewinne)
+# Reihenfolge zählt: die erste passende Regel gewinnt.
+# Viertes Feld: Gegenargument, wenn der Termin doppeldeutig ist
+# ("gute Nachricht ist schlechte Nachricht"), sonst None.
+NQ_RULES = [
+    (["rate decision", "funds rate", "refinancing rate", "deposit facility", "interest rate"], -1,
+     "höhere Zinsen belasten Tech-Werte", None),
+    (["bond auction", "note auction", "bill auction"], -1,
+     "höhere Anleiherenditen belasten Tech-Werte", None),
+    (["cpi", "ppi", "pce", "inflation", "price index", "average hourly earnings",
+      "employment cost", "import prices", "wage"], -1,
+     "höhere Inflation = Zinsen bleiben hoch", None),
+    (["unemployment rate", "unemployment claims", "jobless claims", "continuing claims"], -1,
+     "mehr Arbeitslose = schwächere Wirtschaft",
+     "Mehr Arbeitslose machen aber Zinssenkungen wahrscheinlicher – das kann den NQ auch steigen lassen."),
+    (["non-farm", "nonfarm", "adp", "jolts", "employment change"], 1,
+     "mehr Jobs = stabile Wirtschaft",
+     "Viele Jobs machen aber Zinssenkungen unwahrscheinlicher – das kann den NQ auch fallen lassen."),
+    (["ism", "pmi", "retail sales", "gdp", "consumer confidence", "consumer sentiment",
+      "durable goods", "industrial production", "factory orders", "housing starts",
+      "building permits", "home sales", "productivity", "business confidence", "zew", "ifo",
+      "empire state", "philly fed", "manufacturing index", "economic optimism"], 1,
+     "stärkere Konjunktur stützt Gewinne",
+     "Eine sehr starke Wirtschaft kann aber die Zinsen hoch halten – das kann den NQ auch belasten."),
+]
+
+REACTION_MINUTES = 30     # so lange nach dem Termin wird die NQ-Reaktion gemessen
+REACTION_MIN_PCT = 0.15   # kleinere Bewegungen gelten als "keine klare Reaktion"
 
 
-def calendar_direction(title: str) -> int:
+def calendar_direction(title: str):
+    """Gibt (Richtung, Begründung, Gegenargument oder None) aus Sicht des NQ zurück."""
     t = title.lower()
-    if any(k in t for k in INFLATION_KEYS):
-        return -1
-    if any(k in t for k in JOBLESS_KEYS):
-        return -1
-    if any(k in t for k in GROWTH_KEYS):
-        return 1
-    return 0
+    for keys, direction, why, conflict in NQ_RULES:
+        if any(k in t for k in keys):
+            return direction, why, conflict
+    return 0, "kein klarer Einfluss auf den NQ", None
+
+
+def direction_hint(direction: int) -> str:
+    """Kurzer Hinweis, welches Ergebnis für den NQ gut wäre."""
+    if direction < 0:
+        return "unter Prognose = ▲"
+    if direction > 0:
+        return "über Prognose = ▲"
+    return ""
 
 
 def to_number(val):
@@ -395,19 +452,63 @@ def load_calendar() -> list:
             continue
         actual, forecast = ev.get("actual", ""), ev.get("forecast", "")
         a, f = to_number(actual), to_number(forecast)
+        direction, why, conflict = calendar_direction(ev.get("title", ""))
         sig = 0
         if a is not None and f is not None and a != f:
-            sig = calendar_direction(ev.get("title", "")) * (1 if a > f else -1)
+            sig = direction * (1 if a > f else -1)
         events.append({
             "dt": dt,
+            "country": ev.get("country"),
             "title": f"{ev['country']} {ev.get('title', '')}",
             "impact": ev.get("impact"),
             "forecast": forecast or "–",
             "actual": actual or "–",
             "previous": ev.get("previous") or "–",
-            "signal": sig,
+            "signal": sig,          # endgültige Bewertung (kann durch Marktreaktion ersetzt werden)
+            "expected": sig,        # Bewertung laut Regel
+            "direction": direction,
+            "why": why,
+            "conflict_text": conflict,
+            "reaction": None,       # NQ-Bewegung in % nach dem Termin
+            "contradiction": False, # Markt reagiert anders als die Regel
         })
     events.sort(key=lambda x: x["dt"])
+    return events
+
+
+def market_reaction(dt: datetime, *frames: pd.DataFrame):
+    """NQ-Bewegung in % von kurz vor dem Termin bis REACTION_MINUTES danach (None = keine Daten)."""
+    start = pd.Timestamp(dt).tz_convert("UTC")
+    end = start + pd.Timedelta(minutes=REACTION_MINUTES)
+    for df in frames:  # feinste Daten zuerst
+        if df is None or df.empty:
+            continue
+        before = df[df.index < start]
+        after = df[(df.index >= start) & (df.index <= end)]
+        if before.empty or after.empty or before.index[-1] < start - pd.Timedelta(minutes=30):
+            continue
+        ref = float(before["Close"].iloc[-1])
+        if ref:
+            return (float(after["Close"].iloc[-1]) / ref - 1) * 100
+    return None
+
+
+def add_reactions(events: list, *frames: pd.DataFrame) -> list:
+    """Vergleicht die Regel mit der echten Marktreaktion – bei Widerspruch zählt der Markt."""
+    now_ = datetime.now(BERLIN)
+    for ev in events:
+        if ev["actual"] in ("–", "") or ev["dt"] > now_:
+            continue
+        move = market_reaction(ev["dt"], *frames)
+        if move is None:
+            continue
+        ev["reaction"] = move
+        react = 0 if abs(move) < REACTION_MIN_PCT else (1 if move > 0 else -1)
+        if react != 0 and ev["expected"] != 0 and react != ev["expected"]:
+            ev["contradiction"] = True
+            ev["signal"] = react  # der Markt hat entschieden
+        elif react != 0 and ev["expected"] == 0 and ev["direction"] != 0:
+            ev["signal"] = react  # Ergebnis = Prognose, aber Markt hat klar reagiert
     return events
 
 
@@ -488,10 +589,21 @@ def calendar_analysis(events: list, horizon: str):
         pool = events  # der Kalender-Feed deckt die aktuelle Woche ab
         span = "diese Woche"
     released = [ev for ev in pool if ev["signal"] != 0]
-    score = clamp(sum(ev["signal"] for ev in released), -2, 2)
+    # US-Daten zählen voll, Euro-Daten nur halb (geringerer Einfluss auf den Nasdaq),
+    # wichtige Termine (●●●) doppelt so stark wie mittlere (●●)
+    raw = sum(ev["signal"] * (1 if ev["country"] == "USD" else 0.5) * (1 if ev["impact"] == "High" else 0.5)
+              for ev in released)
+    score = clamp(int(raw + (0.5 if raw > 0 else -0.5)), -2, 2)  # ab ±0,5 zählt es
     if released:
-        reasons = [f"{ev['title']}: {ev['actual']} (Prognose {ev['forecast']}) – "
-                   f"{'▲ gut' if ev['signal'] > 0 else '▼ schlecht'} für NQ." for ev in released[-4:]]
+        reasons = []
+        for ev in released[-4:]:
+            verdict = "▲ bullisch" if ev["signal"] > 0 else "▼ bärisch"
+            if ev["contradiction"]:
+                reasons.append(f"{ev['title']}: {ev['actual']} (Prognose {ev['forecast']}) – ⇅ Regel sagte "
+                               f"anders, aber der NQ reagierte mit {ev['reaction']:+.2f} % → {verdict}.")
+            else:
+                reasons.append(f"{ev['title']}: {ev['actual']} (Prognose {ev['forecast']}) – "
+                               f"{verdict}, {ev['why']}.")
     else:
         upcoming = [ev for ev in pool if ev["dt"] >= now_ and ev["impact"] == "High"]
         reasons = ([f"Noch keine Ergebnisse {span}. Wichtig: " + ", ".join(
@@ -578,7 +690,7 @@ daily = load_prices("1d", "1y")
 prev_close = float(daily["Close"].iloc[-2]) if len(daily) >= 2 else None
 vwap_intraday = session_vwap(intraday)
 news = load_news()
-calendar = load_calendar()
+calendar = add_reactions(load_calendar(), intraday, load_prices("15m", "5d"))
 
 col_chart, col_analysis = st.columns([2.2, 1], gap="small")
 
@@ -715,7 +827,7 @@ with col_cal:
     if todays:
         shown, sub = todays, "Heute · USD/EUR"
     else:
-        shown = [ev for ev in calendar if ev["dt"] >= now][:6]
+        shown = [ev for ev in calendar if ev["dt"] >= now][:8]
         sub = "Heute nichts · nächste Termine"
     st.markdown(f'<div class="tt-h2">Wirtschaftskalender <span>{sub}</span></div>', unsafe_allow_html=True)
 
@@ -726,24 +838,61 @@ with col_cal:
         st.markdown('<div class="tt-card tt-muted" style="font-size:12px">Keine weiteren Termine diese Woche.</div>',
                     unsafe_allow_html=True)
     else:
-        rows = ['<div class="tt-row tt-hd"><span>ZEIT</span><span>EREIGNIS</span>'
-                '<span>PROG / AKT / VORH</span><span></span></div>']
+        rows = ['<div class="tt-row tt-hd"><span></span><span>ZEIT</span><span>EREIGNIS</span>'
+                '<span>PROG / AKT / VORH</span></div>']
         for ev in shown:
-            a, _, c = bias_style(ev["signal"])
+            a, _, c = bias_style(ev["signal"])  # eigene NQ-Bewertung, sobald das Ergebnis da ist
             dots = "●●●" if ev["impact"] == "High" else "●●"
             dcol = AMBER if ev["impact"] == "High" else "#9aa4b2"
             day = "" if ev["dt"].date() == today else f"{ev['dt']:%a} "
+            released = ev["actual"] not in ("–", "")
+            hint = direction_hint(ev["direction"]) if not released else ""
+            # ⇅ = Widerspruch (Markt reagierte anders) oder doppeldeutiger Termin vor dem Ergebnis
+            flag = ""
+            if ev["contradiction"]:
+                flag = f' <span style="color:{AMBER};font-weight:700">⇅</span>'
+            elif ev["conflict_text"] and not released:
+                flag = ' <span class="tt-muted">⇅</span>'
+
+            # Aufklapp-Text: warum so bewertet?
+            rule = direction_hint(ev["direction"])
+            why = [f"<b>Regel:</b> {e(ev['why'][:1].upper() + ev['why'][1:])}"
+                   + (f" ({e(rule)})." if rule else ".")]
+            if ev["conflict_text"]:
+                why.append(f"<b>⇅ Aber:</b> {e(ev['conflict_text'])}")
+            if released and ev["expected"] != 0:
+                ea, el, ec = bias_style(ev["expected"])
+                why.append(f"<b>Ergebnis:</b> {e(ev['actual'])} statt {e(ev['forecast'])} → laut Regel "
+                           f'<span style="color:{ec}">{ea} {el.lower()}</span>.')
+            if ev["reaction"] is not None:
+                ra, rl, rc = bias_style(0 if abs(ev["reaction"]) < REACTION_MIN_PCT else ev["reaction"])
+                why.append(f"<b>Marktreaktion NQ ({REACTION_MINUTES} Min):</b> "
+                           f'<span style="color:{rc}">{ev["reaction"]:+.2f} % {ra}</span>')
+            if ev["contradiction"]:
+                why.append(f'<b style="color:{AMBER}">Fazit:</b> Der Markt sieht es anders als die Regel – '
+                           f"für die Analyse zählt die Marktreaktion ({a} {bias_style(ev['signal'])[1].lower()}).")
+            elif released and ev["reaction"] is not None and ev["signal"] != 0:
+                why.append(f"<b>Fazit:</b> Markt bestätigt die Einschätzung ({a}).")
+            elif not released and ev["conflict_text"]:
+                why.append("<b>Tipp:</b> Nach dem Ergebnis die ersten Minuten abwarten – "
+                           "die Reaktion des Marktes zeigt, welche Seite gewinnt.")
+
             rows.append(
-                f'<div class="tt-row"><span class="tt-mono tt-muted">{day}{ev["dt"]:%H:%M}</span>'
-                f'<span><b style="font-weight:600">{e(ev["title"])}</b>'
-                f'<span class="tt-imp" style="color:{dcol}">{dots}</span></span>'
+                f'<details class="tt-ev"><summary>'
+                f'<div class="tt-row"><span style="color:{c};font-weight:700">{a}</span>'
+                f'<span class="tt-mono tt-muted">{day}{ev["dt"]:%H:%M}</span>'
+                f'<span><b style="font-weight:600">{e(ev["title"])}</b>{flag}'
+                f'<span class="tt-imp"><span style="color:{dcol}">{dots}</span>'
+                + (f' <span class="tt-muted">· {hint}</span>' if hint else "")
+                + '</span></span>'
                 f'<span class="tt-mono tt-vals">{e(ev["forecast"])} / <b>{e(ev["actual"])}</b> / '
-                f'<span class="tt-muted">{e(ev["previous"])}</span></span>'
-                f'<span style="color:{c};font-weight:700">{a}</span></div>'
+                f'<span class="tt-muted">{e(ev["previous"])}</span></span></div></summary>'
+                f'<div class="tt-why">{"<br>".join(why)}</div></details>'
             )
         st.markdown(f'<div class="tt-cal">{"".join(rows)}</div>', unsafe_allow_html=True)
-        st.markdown('<div class="tt-note" style="margin-top:4px">●●● hohe Relevanz · ▲ gut für NQ · '
-                    '▼ schlecht für NQ</div>', unsafe_allow_html=True)
+        st.markdown('<div class="tt-note" style="margin-top:4px">Termin antippen = Erklärung · ●●● hoch · ●● mittel · '
+                    '▲ bullisch / ▼ bärisch für den NQ · ⇅ doppeldeutig bzw. Markt widerspricht</div>',
+                    unsafe_allow_html=True)
 
 with col_news:
     st.markdown('<div class="tt-h2">News <span>auf Deutsch · Einschätzung für NQ</span></div>',
@@ -776,13 +925,13 @@ with col_news:
         st.markdown(f"<style>{card_css}</style>", unsafe_allow_html=True)
 
         # Antippen der Karte öffnet direkt den Artikel – Pfeil immer vorne
-        if st.button(f"{md_arrow(top['score'])}  {md_safe(top['title_de'])}", key="news_top"):
+        if card_button(f"{md_arrow(top['score'])}  {md_safe(top['title_de'])}", key="news_top"):
             show_article(top)
 
         # Zwei weitere Meldungen als kompakte Zeilen
         for i, n in enumerate(rest[:2]):
             key = f"nline_kw_{i}" if has_kw(n) else f"nline_{i}"
-            if st.button(f"{md_arrow(n['score'])}  {md_safe(n['title_de'])}  ·  {t(n)}", key=key):
+            if card_button(f"{md_arrow(n['score'])}  {md_safe(n['title_de'])}  ·  {t(n)}", key=key):
                 show_article(n)
 
         # Galerie: eine Karte, mit ‹ und › weiterblättern
@@ -792,7 +941,7 @@ with col_news:
                 f'<span>{idx + 1} / {len(gallery)}</span></div>',
                 unsafe_allow_html=True,
             )
-            if st.button(f"{md_arrow(g['score'])}  {md_safe(g['title_de'])}", key="gal_card"):
+            if card_button(f"{md_arrow(g['score'])}  {md_safe(g['title_de'])}", key="gal_card"):
                 show_article(g)
             with st.container(key="galnav"):
                 prev_col, next_col = st.columns(2)
