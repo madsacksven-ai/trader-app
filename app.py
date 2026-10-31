@@ -587,65 +587,154 @@ def clamp(v, lo=-3, hi=3):
     return max(lo, min(hi, v))
 
 
-def tech_day(df: pd.DataFrame, vwap: pd.Series, prev_close):
-    reasons, score = [], 0
+def split_sessions(df: pd.DataFrame) -> list:
+    """Teilt Kursdaten in CME-Handelssitzungen (18:00 bis 17:00 New Yorker Zeit)."""
     if df.empty:
-        return 0, ["Keine Intraday-Kursdaten verfügbar."]
-    last = float(df["Close"].iloc[-1])
-    if len(vwap.dropna()):
-        v = float(vwap.dropna().iloc[-1])
-        score += 1 if last > v else -1
-        reasons.append(f"Kurs {'über' if last > v else 'unter'} dem VWAP ({v:,.0f}).")
-    if len(df) >= 50:
-        ema20 = df["Close"].ewm(span=20).mean().iloc[-1]
-        ema50 = df["Close"].ewm(span=50).mean().iloc[-1]
-        score += 1 if ema20 > ema50 else -1
-        reasons.append("5-Min-Trend " + ("aufwärts (EMA 20 über EMA 50)." if ema20 > ema50
-                                        else "abwärts (EMA 20 unter EMA 50)."))
-    if prev_close:
-        score += 1 if last > prev_close else -1
-        reasons.append(f"Kurs {'über' if last > prev_close else 'unter'} dem Vortagesschluss ({prev_close:,.0f}).")
-    return score, reasons
+        return []
+    ny = df.index.tz_convert(NEW_YORK)
+    sid = pd.Index((ny + pd.Timedelta(hours=6)).date)
+    return [(d, df[sid == d]) for d in sorted(set(sid))]
+
+
+def prev_day_levels(df15: pd.DataFrame):
+    """Vortageshoch, -tief und -schluss der letzten abgeschlossenen Sitzung (für Chart und Analyse)."""
+    sessions = split_sessions(df15)
+    if len(sessions) < 2:
+        return None
+    prev = sessions[-2][1]
+    return float(prev["High"].max()), float(prev["Low"].min()), float(prev["Close"].iloc[-1])
+
+
+DAY_MIN_PCT = 0.15    # Vortag zählt erst ab 0,15 % Bewegung als grün/rot
+TREND_MIN_PCT = 0.30  # Mehrtagestrend erst ab 0,3 % über zwei Tage
+NEAR_PCT = 0.03       # so nah an VWAP/Eröffnung gilt als "auf dem Niveau" (±0)
+
+
+def pct(a: float, b: float) -> float:
+    return (a / b - 1) * 100 if b else 0.0
+
+
+def tech_day(df15: pd.DataFrame):
+    """Tages-Bias für Daytrader. Jeder Punkt gibt +1 / −1 (Range-Lage ±0,5), sichtbar in der Begründung."""
+    sessions = split_sessions(df15)
+    if len(sessions) < 2:
+        return 0, [(0, "Zu wenig Intraday-Daten für die Tagesanalyse.")]
+    points = []
+    sid, cur = sessions[-1]
+    prev = sessions[-2][1]
+    last = float(cur["Close"].iloc[-1])
+
+    # Markt geschlossen (z. B. Wochenende)? Dann bewertet die App die letzte Sitzung.
+    if pd.Timestamp.now(tz="UTC") - cur.index[-1] > pd.Timedelta(hours=3):
+        points.append((0, f"Markt geschlossen – Bewertung der letzten Sitzung ({de_day(sid)} {sid:%d.%m.})."))
+
+    # 1) Vortag grün oder rot?
+    p_open, p_close = float(prev["Open"].iloc[0]), float(prev["Close"].iloc[-1])
+    move = pct(p_close, p_open)
+    if abs(move) < DAY_MIN_PCT:
+        points.append((0, f"Vortag ohne klare Richtung ({move:+.2f} %)."))
+    else:
+        points.append((1 if move > 0 else -1,
+                       f"Vortag {'grün' if move > 0 else 'rot'} ({p_open:,.0f} → {p_close:,.0f}, {move:+.2f} %)."))
+
+    # 2) Mehrtagestrend: drei abgeschlossene Sitzungen mit steigenden/fallenden Schlusskursen?
+    closes = [float(s["Close"].iloc[-1]) for _, s in sessions[-4:-1]]
+    trend = pct(closes[2], closes[0]) if len(closes) == 3 else 0
+    if len(closes) == 3 and closes[0] > closes[1] > closes[2] and trend <= -TREND_MIN_PCT:
+        points.append((-1, "Zwei Tage in Folge tiefere Schlusskurse – Abwärtstrend."))
+    elif len(closes) == 3 and closes[0] < closes[1] < closes[2] and trend >= TREND_MIN_PCT:
+        points.append((1, "Zwei Tage in Folge höhere Schlusskurse – Aufwärtstrend."))
+    else:
+        points.append((0, "Kein klarer Trend über mehrere Tage."))
+
+    # 3) Lage zur Vortagesrange
+    pdh, pdl = float(prev["High"].max()), float(prev["Low"].min())
+    if last > pdh:
+        points.append((1, f"Kurs über dem Vortageshoch ({pdh:,.0f}) – Ausbruch nach oben."))
+    elif last < pdl:
+        points.append((-1, f"Kurs unter dem Vortagestief ({pdl:,.0f}) – Ausbruch nach unten."))
+    else:
+        upper = last > (pdh + pdl) / 2
+        points.append((0.5 if upper else -0.5,
+                       f"Kurs in der {'oberen' if upper else 'unteren'} Hälfte der Vortagesrange "
+                       f"({pdl:,.0f}–{pdh:,.0f})."))
+
+    # 4) Intraday-Struktur: Hoch-Tief-Folgen der laufenden Sitzung auf 1-Std-Kerzen
+    hourly = cur.resample("1h").agg({"High": "max", "Low": "min"}).dropna()
+    if len(hourly) >= 3:
+        hi, lo = hourly["High"].values, hourly["Low"].values
+        up = sum(1 for i in range(1, len(hi)) if hi[i] > hi[i - 1] and lo[i] > lo[i - 1])
+        down = sum(1 for i in range(1, len(hi)) if hi[i] < hi[i - 1] and lo[i] < lo[i - 1])
+        diff = up - down
+        p = 1 if diff >= 2 else -1 if diff <= -2 else 0
+        label = ("überwiegend höhere Hochs/Tiefs" if p > 0 else
+                 "überwiegend tiefere Hochs/Tiefs" if p < 0 else "gemischt, kein klarer Trend")
+        points.append((p, f"Intraday-Struktur {label} ({up}× höher, {down}× tiefer, 1-Std-Kerzen)."))
+    else:
+        points.append((0, "Sitzung noch zu jung für eine Intraday-Struktur."))
+
+    # 5) VWAP der Sitzung
+    vwap = session_vwap(cur).dropna()
+    if len(vwap):
+        v = float(vwap.iloc[-1])
+        if abs(pct(last, v)) < NEAR_PCT:
+            points.append((0, f"Kurs direkt am VWAP ({v:,.0f})."))
+        else:
+            points.append((1 if last > v else -1, f"Kurs {'über' if last > v else 'unter'} dem VWAP ({v:,.0f})."))
+
+    # 6) Eröffnung: US-Eröffnung 15:30 Uhr, falls schon gelaufen, sonst Sitzungseröffnung
+    ny = cur.index.tz_convert(NEW_YORK)
+    rth = cur[(ny.date == sid) & ((ny.hour > 9) | ((ny.hour == 9) & (ny.minute >= 30)))]
+    if len(rth):
+        ref, name = float(rth["Open"].iloc[0]), "US-Eröffnung (15:30)"
+    else:
+        ref, name = float(cur["Open"].iloc[0]), "Sitzungseröffnung (Vorabend)"
+    if abs(pct(last, ref)) < NEAR_PCT:
+        points.append((0, f"Kurs direkt an der {name} ({ref:,.0f})."))
+    else:
+        points.append((1 if last > ref else -1,
+                       f"Kurs {'über' if last > ref else 'unter'} der {name} ({ref:,.0f})."))
+
+    return sum(p for p, _ in points), points
 
 
 def tech_week(daily: pd.DataFrame):
     if len(daily) < 25:
-        return 0, ["Zu wenig Tagesdaten für die Wochenanalyse."]
-    reasons, score = [], 0
+        return 0, [(0, "Zu wenig Tagesdaten für die Wochenanalyse.")]
+    points = []
     last = float(daily["Close"].iloc[-1])
     ny = daily.index.tz_convert(NEW_YORK)
     week = ny.isocalendar().week.values == ny[-1].isocalendar()[1]
     week_open = float(daily["Open"][week].iloc[0])
-    score += 1 if last > week_open else -1
-    reasons.append(f"Kurs {'über' if last > week_open else 'unter'} der Wochen-Eröffnung ({week_open:,.0f}).")
+    points.append((1 if last > week_open else -1,
+                   f"Kurs {'über' if last > week_open else 'unter'} der Wochen-Eröffnung ({week_open:,.0f})."))
     sma20 = float(daily["Close"].rolling(20).mean().iloc[-1])
-    score += 1 if last > sma20 else -1
-    reasons.append(f"Kurs {'über' if last > sma20 else 'unter'} dem 20-Tage-Durchschnitt ({sma20:,.0f}).")
+    points.append((1 if last > sma20 else -1,
+                   f"Kurs {'über' if last > sma20 else 'unter'} dem 20-Tage-Durchschnitt ({sma20:,.0f})."))
     five_ago = float(daily["Close"].iloc[-6])
-    score += 1 if last > five_ago else -1
-    reasons.append(f"Letzte 5 Handelstage: {(last / five_ago - 1) * 100:+.1f} %.")
-    return score, reasons
+    points.append((1 if last > five_ago else -1, f"Letzte 5 Handelstage: {(last / five_ago - 1) * 100:+.1f} %."))
+    return sum(p for p, _ in points), points
 
 
 def tech_month(daily: pd.DataFrame):
     if len(daily) < 60:
-        return 0, ["Zu wenig Tagesdaten für die Monatsanalyse."]
-    reasons, score = [], 0
+        return 0, [(0, "Zu wenig Tagesdaten für die Monatsanalyse.")]
+    points = []
     last = float(daily["Close"].iloc[-1])
     ny = daily.index.tz_convert(NEW_YORK)
     month = (ny.month == ny[-1].month) & (ny.year == ny[-1].year)
     month_open = float(daily["Open"][month].iloc[0])
-    score += 1 if last > month_open else -1
-    reasons.append(f"Kurs {'über' if last > month_open else 'unter'} der Monats-Eröffnung ({month_open:,.0f}).")
+    points.append((1 if last > month_open else -1,
+                   f"Kurs {'über' if last > month_open else 'unter'} der Monats-Eröffnung ({month_open:,.0f})."))
     sma50 = float(daily["Close"].rolling(50).mean().iloc[-1])
-    score += 1 if last > sma50 else -1
-    reasons.append(f"Kurs {'über' if last > sma50 else 'unter'} dem 50-Tage-Durchschnitt ({sma50:,.0f}).")
+    points.append((1 if last > sma50 else -1,
+                   f"Kurs {'über' if last > sma50 else 'unter'} dem 50-Tage-Durchschnitt ({sma50:,.0f})."))
     if len(daily) >= 200:
         sma200 = float(daily["Close"].rolling(200).mean().iloc[-1])
-        score += 1 if sma50 > sma200 else -1
-        reasons.append("Langfristtrend " + ("aufwärts (50-Tage über 200-Tage-Linie)." if sma50 > sma200
-                                           else "abwärts (50-Tage unter 200-Tage-Linie)."))
-    return score, reasons
+        points.append((1 if sma50 > sma200 else -1, "Langfristtrend " + (
+            "aufwärts (50-Tage über 200-Tage-Linie)." if sma50 > sma200 else
+            "abwärts (50-Tage unter 200-Tage-Linie).")))
+    return sum(p for p, _ in points), points
 
 
 def calendar_analysis(events: list, horizon: str):
@@ -752,9 +841,13 @@ st.markdown(
 # 11. DATEN LADEN
 # ==============================================================================
 intraday = load_prices("5m", "2d")
+m15 = load_prices("15m", "5d")  # Basis für Tages-Bias, Vortageshoch/-tief und Sitzungen
 daily = load_prices("1d", "1y")
-prev_close = float(daily["Close"].iloc[-2]) if len(daily) >= 2 else None
-vwap_intraday = session_vwap(intraday)
+levels = prev_day_levels(m15)  # (Vortageshoch, Vortagestief, Vortagesschluss) der letzten Sitzung
+if levels:
+    prev_close = levels[2]
+else:
+    prev_close = float(daily["Close"].iloc[-2]) if len(daily) >= 2 else None
 news = load_news()
 for _n in news:
     _n.setdefault("title_de", _n["title"])
@@ -770,18 +863,20 @@ with col_analysis:
                        label_visibility="collapsed", key="horizon")
 
     if horizon == "Tag":
-        t_score, t_reasons = tech_day(intraday, vwap_intraday, prev_close)
+        t_score, t_points = tech_day(m15)
     elif horizon == "Woche":
-        t_score, t_reasons = tech_week(daily)
+        t_score, t_points = tech_week(daily)
     else:
-        t_score, t_reasons = tech_month(daily)
+        t_score, t_points = tech_month(daily)
     c_score, c_reasons = calendar_analysis(calendar, horizon)
-    n_score, n_reasons = news_analysis(news, horizon)
+    n_raw, n_reasons = news_analysis(news, horizon)
+    n_score = n_raw * 0.5  # Schlagzeilen sind grob – sie zählen nur halb
 
+    # Gewichtung: Technik am stärksten (bis ±6), Kalender bis ±2, News bis ±0,5
     total = t_score + c_score + n_score
     bias_val = 1 if total >= 2 else -1 if total <= -2 else 0
     arrow, label, color = bias_style(bias_val)
-    strength = 1 if abs(total) <= 2 else 2 if abs(total) <= 4 else 3
+    strength = 1 if abs(total) <= 3 else 2 if abs(total) <= 5 else 3
     strength_txt = {1: "schwach", 2: "mittel", 3: "stark"}[strength]
     horizon_word = {"Tag": "TAGES", "Woche": "WOCHEN", "Monat": "MONATS"}[horizon]
 
@@ -805,10 +900,20 @@ with col_analysis:
 """,
         unsafe_allow_html=True,
     )
-    with st.expander(f"Warum {label.lower()}? Begründung"):
-        st.markdown("**Technik**\n\n" + "\n".join(f"- {r}" for r in t_reasons))
-        st.markdown("**Kalender**\n\n" + "\n".join(f"- {r}" for r in c_reasons))
-        st.markdown("**News/Makro**\n\n" + "\n".join(f"- {r}" for r in n_reasons))
+    def pts(p) -> str:
+        """Punkte lesbar: +1, −1, +0,5, ±0."""
+        if p == 0:
+            return "±0"
+        return f"{p:+g}".replace("-", "−").replace(".", ",")
+
+    with st.expander(f"Warum {label.lower()}? Begründung (Summe {pts(total)})"):
+        st.markdown(f"**Technik ({pts(t_score)})**\n\n"
+                    + "\n".join(f"- **{pts(p)}** {md_safe(txt)}" for p, txt in t_points))
+        st.markdown(f"**Kalender ({pts(c_score)})**\n\n" + "\n".join(f"- {md_safe(r)}" for r in c_reasons))
+        st.markdown(f"**News/Makro ({pts(n_score)}, zählt halb)**\n\n"
+                    + "\n".join(f"- {md_safe(r)}" for r in n_reasons))
+        st.markdown('<span class="tt-note">Bullisch ab +2, bärisch ab −2. Technik zählt am stärksten. '
+                    'Automatische Einschätzung, keine Anlageberatung.</span>', unsafe_allow_html=True)
         st.markdown('<span class="tt-note">Automatische Einschätzung aus einfachen Regeln, '
                     'keine Anlageberatung.</span>', unsafe_allow_html=True)
 
@@ -847,6 +952,11 @@ with col_chart:
             show_vwap = session_vwap(prices).reindex(show.index)
             fig.add_trace(go.Scatter(x=x, y=show_vwap, mode="lines", name="VWAP",
                                      line=dict(color=AMBER, width=1.3, dash="dot")))
+        if levels and tf in ("5m", "15m"):  # Vortageshoch und -tief für Daytrader
+            for lvl, name in ((levels[0], "Vortageshoch"), (levels[1], "Vortagestief")):
+                fig.add_hline(y=lvl, line=dict(color="#7c8aa0", width=1, dash="dot"),
+                              annotation_text=name, annotation_font_size=10,
+                              annotation_font_color="#9aa4b2", annotation_position="top right")
         if prev_close and tf != "1T":
             fig.add_hline(y=prev_close, line=dict(color="#5b6578", width=1, dash="dash"),
                           annotation_text="Vortagesschluss", annotation_font_size=10,
