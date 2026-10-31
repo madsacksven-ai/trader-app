@@ -145,12 +145,13 @@ def session_vwap(df: pd.DataFrame) -> pd.Series:
     ny = df.index.tz_convert(NEW_YORK)
     # Sitzung beginnt um 18:00 ET -> alles ab 18:00 zählt zum Folgetag
     session = (ny + pd.Timedelta(hours=6)).date
-    typical = (df["High"] + df["Low"] + df["Close"]) / 3
-    vol = df["Volume"].fillna(0)
+    typical = ((df["High"] + df["Low"] + df["Close"]) / 3).astype(float)
+    vol = pd.to_numeric(df["Volume"], errors="coerce").fillna(0.0).astype(float)
     grp = pd.Series(session, index=df.index)
     pv = (typical * vol).groupby(grp).cumsum()
-    vv = vol.groupby(grp).cumsum().replace(0, pd.NA)
-    return (pv / vv).astype(float)
+    vv = vol.groupby(grp).cumsum()
+    # Ohne Volumen (z. B. Wochenende) gibt es keinen VWAP -> leer statt Absturz
+    return (pv / vv.where(vv > 0)).astype(float)
 
 
 # ==============================================================================
